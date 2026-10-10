@@ -13,6 +13,7 @@ Right Key is a free web app that listens to live music through your phone's micr
 | **Chord progression** | The song's chord loop as numbers, like `4 1 5 6`, plus the chord names |
 | **Bass note** | The lowest note, which the app uses to help pick the chord |
 | **Voice note** | The pitch of a singer or lead instrument, with how sharp or flat it is |
+| **Virtual piano** | A two-octave piano you can play. Tap a chord and its notes light up on the keys |
 | **Play root / Play progression** | Plays back what the app thinks it heard, so you can check it by ear |
 
 ## How it works
@@ -20,8 +21,8 @@ Right Key is a free web app that listens to live music through your phone's micr
 1. **It listens.** The app reads the microphone and breaks the sound into the 12 notes of the scale.
 2. **It ignores drum hits.** Short, sharp sounds are filtered out and the held notes are kept.
 3. **It finds the chord.** It matches the notes against major, minor and seventh chords, and favours the chord that starts on the bass note.
-4. **It learns the loop.** When the first chord of the song comes back, the app saves the chords before it as one loop.
-5. **It finds the key.** It checks which key all the loop's chords belong to. For example, C, G, D and Em all fit **G major**, so the root is G and the loop is `4 1 5 6`.
+4. **It learns the loop.** It writes down each chord change and looks for the pattern that repeats. The song can start on any chord (C Em D, C Em D...). That repeating pattern is the loop.
+5. **It finds the key.** It checks which key all the loop's chords belong to, without assuming the first chord is the root. For example, C, G, D and Em all fit **G major**, so the root is G and the loop is `4 1 5 6`.
 
 Numbers count from the key's major scale. In a minor key, `1` is the relative major.
 
@@ -38,12 +39,44 @@ Numbers count from the key's major scale. In a minor key, `1` is the relative ma
 - **Set key**: pick the key yourself if you already know it. The numbers follow your choice.
 - **Reset**: clears everything for the next song.
 
+## Tips for better results
+
+- Let the band play at least two rounds of the pattern so the loop can repeat.
+- Use **Reset** between songs.
+- A line from the sound desk (aux out) is more accurate than a room microphone.
+- Loud crowds, muddy rooms and jazzy chords make guessing harder.
+
+## Limits
+
+- It recognises major, minor and seventh chords. Suspended, diminished and extended chords are not shown yet.
+- It is a guide for your ears, not a replacement for them. Always check against the song.
+- The key can be wrong in the first few seconds of a song.
+- A chord held for two bars (like D D) counts as one chord, because the app tracks chord changes, not beats.
+
 ## Privacy
 
 Everything runs in your browser. No audio is recorded, saved or sent anywhere.
 
 ## Run it yourself
 
+Right Key is a single file, `index.html`, with no build step.
+
+- **On your computer:** open `index.html` in a browser (microphone access needs HTTPS or `localhost`).
+- **On GitHub Pages:** upload the files to a repo, then Settings > Pages > deploy from the `main` branch, root folder.
+
+## Editing the code
+
+- `loop()` reads the microphone each frame and scores the chords.
+- `findKey()` picks the key from the loop, the bass notes and the overall note mix.
+- `draw()` updates the screen.
+- The `<style>` block holds the iOS-style look (glass cards, light and dark modes).
+
+## Ideas for later
+
+- Home-screen icon and offline use
+- An ear-training game (name the note, chord or progression)
+- A neural chord model for better accuracy in full-band recordings
+- A capo and transpose view
 
 ## Credits
 
