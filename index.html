@@ -34,6 +34,13 @@ button.go,button.on{background:var(--ink);color:var(--bg);border-color:var(--ink
 .badge{display:inline-block;font-size:.8rem;font-weight:600;padding:4px 10px;border-radius:999px;background:var(--ln)}
 .two{display:flex;gap:28px;margin-top:10px}.two b{font-size:1.5rem}
 @media(max-width:640px){main{grid-template-columns:1fr}}
+.chip{font:inherit;color:var(--ink);cursor:pointer}
+.piano{position:relative;display:flex;height:150px;margin-top:10px;border-radius:14px;overflow:hidden;box-shadow:0 6px 20px rgba(0,0,0,.18);touch-action:manipulation}
+.wk,.bk{-webkit-backdrop-filter:none;backdrop-filter:none;border:0;padding:0;cursor:pointer;transition:background .1s}
+.wk{flex:1;background:#fff;border-right:1px solid #d1d1d6;border-radius:0 0 8px 8px;color:#8e8e93;font-size:.7rem;font-weight:500;display:flex;align-items:flex-end;justify-content:center;padding-bottom:8px}
+.wk:hover,.wk:active{background:#f2f2f7;transform:none}.wk.on{background:#0a84ff;color:#fff}.wk.hit{background:#d1d1d6}
+.bk{position:absolute;top:0;height:60%;width:calc(100%/14*.6);transform:translateX(-50%);background:#1c1c1e;border-radius:0 0 6px 6px;z-index:2}
+.bk:hover,.bk:active{background:#3a3a3c;transform:translateX(-50%)}.bk.on{background:#0a84ff}.bk.hit{background:#48484a}
 </style></head><body><main>
 <header><h1>Right Key</h1><span class="badge" id="msg">Hold the phone near the band</span></header>
 <section class="card"><div class="mut">Root note</div><div class="root" id="root">–</div><div class="q" id="qual">Listening for the key</div><div class="sub" id="kc"></div>
@@ -42,7 +49,7 @@ button.go,button.on{background:var(--ink);color:var(--bg);border-color:var(--ink
 <div class="two"><div><div class="mut">Bass</div><b id="bs">–</b></div><div><div class="mut">Voice</div><b id="nt">–</b> <span class="sub" id="cn"></span></div></div></section>
 <section class="card wide"><div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap"><div><div class="mut">Chord progression</div><div class="nums" id="nums">–</div></div><span class="badge" id="lp">Listening for the loop…</span></div>
 <div class="row" id="pg"></div><div class="btns"><button id="pp" class="go">Play progression</button></div>
-<p class="sub">The first chord returning marks one full loop. That loop sets the key, with the bass note helping each chord. Numbers count from the key's major scale.</p></section>
+<div class="mut" style="margin-top:20px">Piano</div><div class="sub" id="pn">Tap a chord above or press the keys</div><div id="pi" class="piano"></div></section>
 <script>
 const $=s=>document.querySelector(s);
 const NN=['C','C#','D','Eb','E','F','F#','G','Ab','A','Bb','B'],LAB=['1','♭2','2','♭3','3','4','♯4','5','♭6','6','♭7','7'];
@@ -54,11 +61,12 @@ const base=()=>key?(key.m?(key.k+3)%12:key.k):null;
 const pr=(a,k)=>{const n=12,ma=a.reduce((x,y)=>x+y)/n,mb=k.reduce((x,y)=>x+y)/n;let d=0,x=0,y=0;for(let i=0;i<n;i++){d+=(a[i]-ma)*(k[i]-mb);x+=(a[i]-ma)**2;y+=(k[i]-mb)**2}return d/Math.sqrt(x*y||1)};
 const rot=(p,k)=>p.map((_,i)=>p[(i-k+12)%12]);
 let bh=Array(12).fill(0);
+const sg=p=>p.r+(p.t=='m'?'m':'');
+function detect(){const s=seqA,n=s.length;for(let p=2;p<=8&&2*p<=n;p++){let j=n-1,m=0;while(j-p>=0&&sg(s[j])==sg(s[j-p])){m++;j--}if(Math.floor((m+p)/p)<(p==2?3:2))continue;const i=n-(m+p),l=s.slice(i,i+p);if(new Set(l.map(sg)).size<2)continue;return l}return null}
 const src=()=>lps||(seqA.length?seqA:prog);
 function findKey(){const tw=src().reduce((a,p)=>a+1+Math.min(p.n||0,300)/60,0)||1,bsum=bh.reduce((a,b)=>a+b)||1,sc=[];
  for(let R=0;R<12;R++){let ch=0;
-  src().forEach((p,i)=>{const o=(p.r-R+12)%12,ok=(DIA[o]||[]).includes(p.t),w=(1+Math.min(p.n||0,300)/60)*(i==0?1.8:1);ch+=(ok?w:-.5*w)/tw;
-   if(i==0&&((o==0&&p.t!='m')||(o==9&&p.t=='m')))ch+=.8});
+  src().forEach((p,i)=>{const o=(p.r-R+12)%12,ok=(DIA[o]||[]).includes(p.t),w=(1+Math.min(p.n||0,300)/60);ch+=(ok?w:-.5*w)/tw});
   const b=(bh[R]+.9*bh[(R+9)%12]+.4*bh[(R+7)%12])/bsum,maj=pr(L,rot(MAJ,R)),mn=pr(L,rot(MIN,(R+9)%12));
   sc.push({R,maj,mn,s:Math.max(maj,mn)+.7*ch+.9*b})}
  sc.sort((a,b)=>b.s-a.s);const t=sc[0];let mw=0;
@@ -98,17 +106,25 @@ function loop(){if(!run)return;requestAnimationFrame(loop);if(performance.now()<
  if(cur&&id===cur.id){stab=0;cand='';return}
  if(id===cand)stab++;else{cand=id;stab=0}
  const curS=cur?score(c,cur.r,TY.find(t=>t.n==cur.t),bass):0;
- if(stab>=10&&bs>curS+.04){cur={id,r:best.r,t:best.t.n};prog.push(cur);if(prog.length>24)prog.shift();stab=0;if(!lps){seqA.push(cur);if(seqA.length>=3&&cur.id===seqA[0].id&&new Set(seqA.map(p=>p.id)).size>=2){lps=seqA.slice(0,-1);$('#msg').textContent='Loop captured'}}if(!locked)setKey();draw()}}
+ if(stab>=10&&bs>curS+.04){cur={id,r:best.r,t:best.t.n};prog.push(cur);if(prog.length>24)prog.shift();stab=0;seqA.push(cur);if(seqA.length>200)seqA.shift();const dl=detect();if(dl){lps=dl;$('#msg').textContent='Loop captured'}if(!locked)setKey();draw();if(performance.now()>hold)showChord(cur,'Hearing ')}}
 const lab=p=>base()===null?'?':LAB[(p.r-base()+12)%12]+p.t;
 function showKey(k,m){$('#root').textContent=NN[k];$('#qual').textContent=m?'minor':'major'}
 const dd=a=>a.filter((p,i)=>i==0||p.id!==a[i-1].id);
-function draw(){const l=prog[prog.length-1],A=lps||dd(seqA).slice(-8);$('#num').textContent=l?lab(l):'–';$('#nm').textContent=l?NN[l.r]+l.t:'';
+let curList=[],hold=0;
+function draw(){const l=prog[prog.length-1],A=lps||dd(seqA).slice(-8);curList=A;$('#num').textContent=l?lab(l):'–';$('#nm').textContent=l?NN[l.r]+l.t:'';
  $('#lp').textContent=lps?'Loop captured':'Listening for the loop…';$('#nums').textContent=A.length?A.map(lab).join('  '):'–';
- $('#pg').innerHTML=A.map(p=>`<div class="chip${l&&p.id==l.id?' cur':''}"><b>${lab(p)}</b><span>${NN[p.r]+p.t}</span></div>`).join('')}
+ $('#pg').innerHTML=A.map((p,i)=>`<button class="chip${l&&p.id==l.id?' cur':''}" data-i="${i}"><b>${lab(p)}</b><span>${NN[p.r]+p.t}</span></button>`).join('')}
 const mf=m=>440*2**((m-69)/12);
 function tone(f,t0,d,v){const o=ctx.createOscillator(),g=ctx.createGain();o.type='triangle';o.frequency.value=f;g.gain.setValueAtTime(0,t0);g.gain.linearRampToValueAtTime(v,t0+.03);g.gain.exponentialRampToValueAtTime(.001,t0+d);o.connect(g);g.connect(ctx.destination);o.start(t0);o.stop(t0+d+.05)}
 async function ready(){ctx=ctx||new (window.AudioContext||window.webkitAudioContext)();await ctx.resume();return ctx.currentTime+.05}
 $('#pr').onclick=async()=>{if(!key)return;const t=await ready();tone(mf(48+key.k),t,1.8,.25);tone(mf(36+key.k),t,1.8,.25);mute=performance.now()+2300};
-$('#pp').onclick=async()=>{const a=lps||dd(seqA);if(!a.length)return;const t=await ready();a.forEach((c,i)=>{const t0=t+i*1.1;TY.find(x=>x.n==c.t).s.forEach(n=>tone(mf(48+c.r+n),t0,1.1,.1));tone(mf(36+c.r),t0,1.1,.22)});mute=performance.now()+a.length*1100+500};
+const WH=[0,2,4,5,7,9,11],NIV=c=>TY.find(x=>x.n==c.t).s.map(i=>48+c.r+i);
+function buildPiano(){let w='',b='',wi=0;for(let m=48;m<72;m++){const pc=m%12;if(WH.includes(pc)){w+=`<button class="wk" data-m="${m}" aria-label="${NN[pc]}">${NN[pc]}</button>`;wi++}else b+=`<button class="bk" data-m="${m}" aria-label="${NN[pc]}" style="left:calc(${wi}*100%/14)"></button>`}$('#pi').innerHTML=w+b}
+function showChord(c,tag){document.querySelectorAll('#pi button').forEach(b=>b.classList.remove('on'));if(!c){$('#pn').textContent='Tap a chord above or press the keys';return}const ms=NIV(c);ms.forEach(m=>{const b=document.querySelector(`#pi [data-m="${m}"]`);if(b)b.classList.add('on')});$('#pn').textContent=(tag||'')+NN[c.r]+c.t+'  ·  '+ms.map(m=>NN[m%12]).join(' · ')}
+const sound=(c,t0,d)=>{NIV(c).forEach(m=>tone(mf(m),t0,d,.1));tone(mf(36+c.r),t0,d,.22)};
+$('#pg').onclick=async e=>{const b=e.target.closest('.chip');if(!b)return;const c=curList[+b.dataset.i];if(!c)return;const t=await ready();sound(c,t,1.4);showChord(c,'Chord ');hold=performance.now()+2500;mute=performance.now()+1600};
+$('#pp').onclick=async()=>{const a=lps||dd(seqA).slice(-8);if(!a.length)return;const t=await ready();a.forEach((c,i)=>{sound(c,t+i*1.1,1.1);setTimeout(()=>showChord(c,'Playing '),i*1100+50)});hold=performance.now()+a.length*1100+1500;mute=performance.now()+a.length*1100+500};
+$('#pi').onpointerdown=async e=>{const b=e.target.closest('button');if(!b)return;const t=await ready();tone(mf(+b.dataset.m),t,1.6,.22);b.classList.add('hit');setTimeout(()=>b.classList.remove('hit'),180)};
+buildPiano();
 draw();
 </script></main></body></html>
