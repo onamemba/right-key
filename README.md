@@ -39,44 +39,9 @@ Numbers count from the key's major scale. In a minor key, `1` is the relative ma
 - **Set key**: pick the key yourself if you already know it. The numbers follow your choice.
 - **Reset**: clears everything for the next song.
 
-## Tips for better results
-
-- Let the band play at least two rounds of the pattern so the loop can repeat.
-- Use **Reset** between songs.
-- A line from the sound desk (aux out) is more accurate than a room microphone.
-- Loud crowds, muddy rooms and jazzy chords make guessing harder.
-
-## Limits
-
-- It recognises major, minor and seventh chords. Suspended, diminished and extended chords are not shown yet.
-- It is a guide for your ears, not a replacement for them. Always check against the song.
-- The key can be wrong in the first few seconds of a song.
-- A chord held for two bars (like D D) counts as one chord, because the app tracks chord changes, not beats.
-
 ## Privacy
 
 Everything runs in your browser. No audio is recorded, saved or sent anywhere.
-
-## Run it yourself
-
-Right Key is a single file, `index.html`, with no build step.
-
-- **On your computer:** open `index.html` in a browser (microphone access needs HTTPS or `localhost`).
-- **On GitHub Pages:** upload the files to a repo, then Settings > Pages > deploy from the `main` branch, root folder.
-
-## Editing the code
-
-- `loop()` reads the microphone each frame and scores the chords.
-- `findKey()` picks the key from the loop, the bass notes and the overall note mix.
-- `draw()` updates the screen.
-- The `<style>` block holds the iOS-style look (glass cards, light and dark modes).
-
-## Ideas for later
-
-- Home-screen icon and offline use
-- An ear-training game (name the note, chord or progression)
-- A neural chord model for better accuracy in full-band recordings
-- A capo and transpose view
 
 ## Credits
 
