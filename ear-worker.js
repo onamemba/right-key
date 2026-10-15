@@ -59,8 +59,9 @@ onmessage = async (e) => {
         (f, o) => { frames.push(...f); onsets.push(...o); },
         () => {}
       );
-      const events = outputToNotesPoly(frames, onsets, 0.5, 0.3, 11);
-      const notes = noteFramesToTime(events).map(n => ({
+      const events = outputToNotesPoly(frames, onsets, 0.55, 0.35, 11);
+      // Drop micro-blips: phantom notes poison key/chord detection on real audio.
+      const notes = noteFramesToTime(events).filter(n => n.durationSeconds >= 0.07).map(n => ({
         midi: n.pitchMidi,
         start: msg.windowStart + n.startTimeSeconds,
         dur: Math.max(0.05, n.durationSeconds),

@@ -9,6 +9,7 @@
 const NN = ['C','C#','D','Eb','E','F','F#','G','Ab','A','Bb','B'];
 const MAJ = [6.35,2.23,3.48,2.33,4.38,4.09,2.52,5.19,2.39,3.66,2.29,2.88];
 const MIN = [6.33,2.68,3.52,5.38,2.60,3.53,2.54,4.75,3.98,2.69,3.34,3.17];
+const DIA_MAJ = [0,2,4,5,7,9,11], DIA_MIN = [0,2,3,5,7,8,10];
 // Chord templates: pitch-class sets relative to root.
 const TEMPLATES = [
   { type: '',   pcs: [0, 4, 7] },
@@ -17,9 +18,11 @@ const TEMPLATES = [
   { type: '7',  pcs: [0, 4, 7, 10] },
 ];
 
+const P = m => ((m % 12) + 12) % 12;
+
 function midiToName(m) {
   const pcs = ['C','C#','D','D#','E','F','F#','G','G#','A','A#','B'];
-  return pcs[((m % 12) + 12) % 12] + (Math.floor(m / 12) - 1);
+  return pcs[P(m)] + (Math.floor(m / 12) - 1);
 }
 function midiToFreq(m) { return 440 * Math.pow(2, (m - 69) / 12); }
 function chordName(c) { return NN[c.root] + (c.type === 'm' ? 'm' : c.type === 'dim' ? '°' : c.type === '7' ? '7' : ''); }
@@ -33,8 +36,10 @@ function pearson(a, b) {
 function rot(p, k) { return p.map((_, i) => p[(i - k + 12) % 12]); }
 
 /* Score one 12-dim pitch-class weight vector against triad templates.
+ * bass = pitch class of the lowest sounding note (-1 = unknown). A chord whose
+ * root sits in the bass gets a strong boost; a fifth in the bass a small one.
  * Returns { root, type, score } or null when nothing fits. */
-function scoreChord(pc) {
+function scoreChord(pc, bass = -1) {
   const total = pc.reduce((a, b) => a + b, 0);
   if (total <= 0) return null;
   let best = null;
@@ -43,77 +48,143 @@ function scoreChord(pc) {
       let s = 0;
       for (let p = 0; p < 12; p++) {
         const rel = (p - r + 12) % 12;
-        s += t.pcs.includes(rel) ? pc[p] : -0.35 * pc[p];
+        s += t.pcs.includes(rel) ? pc[p] : -0.4 * pc[p];
       }
       // Prefer simpler triads over 7ths unless clearly stronger.
       if (t.type === '7') s *= 0.92;
+      if (bass >= 0) {
+        if (r === bass) s += 0.28 * total;            // root in the bass
+        else if (r === (bass + 7) % 12) s += 0.10 * total; // fifth in the bass
+      }
       const ns = s / total;
       if (!best || ns > best.score) best = { root: r, type: t.type, score: ns };
     }
   }
-  return best && best.score > 0.18 ? best : null;
+  return best && best.score > 0.22 ? best : null;
 }
 
 /* Slice notes into fixed windows and name the chord sounding in each.
+ * 1s windows by default (stable), bass-aware, with majority smoothing over
+ * neighbouring windows so a single noisy window can't flip the chord.
  * Returns [{ root, type, start, dur }] merged across consecutive same chords. */
-function chordsOverTime(notes, winSec = 0.5) {
+function chordsOverTime(notes, winSec = 1.0) {
   if (!notes.length) return [];
   const t0 = Math.min(...notes.map(n => n.start));
   const t1 = Math.max(...notes.map(n => n.start + n.dur));
-  const out = [];
+  const wins = [];
   for (let t = t0; t < t1; t += winSec) {
     const pc = new Array(12).fill(0);
+    let bass = -1, low = Infinity;
     for (const n of notes) {
-      if (n.start < t + winSec && n.start + n.dur > t) {
-        const overlap = Math.min(n.start + n.dur, t + winSec) - Math.max(n.start, t);
-        pc[((n.midi % 12) + 12) % 12] += overlap * (0.3 + (n.amp || 0.5));
+      const s = Math.max(n.start, t), e = Math.min(n.start + n.dur, t + winSec);
+      if (e > s) {
+        const p = P(n.midi);
+        pc[p] += (e - s) * (0.3 + (n.amp || 0.5));
+        if (n.midi < low) { low = n.midi; bass = p; }
       }
     }
-    const c = scoreChord(pc);
-    out.push({ root: c ? c.root : -1, type: c ? c.type : '', start: t, dur: winSec, score: c ? c.score : 0 });
+    const c = scoreChord(pc, bass);
+    wins.push(c ? { root: c.root, type: c.type, start: t, dur: winSec } : null);
   }
-  // Merge consecutive windows with the same chord.
-  const merged = [];
-  for (const w of out) {
-    const last = merged[merged.length - 1];
-    if (w.root >= 0 && last && last.root === w.root && last.type === w.type) {
-      last.dur += w.dur;
-    } else if (w.root >= 0) {
-      merged.push({ root: w.root, type: w.type, start: w.start, dur: w.dur });
+  // Majority smoothing: a window takes the label that wins among itself and
+  // its neighbours, so one bad window can't flicker the chord.
+  const sym = i => (wins[i] ? wins[i].root + wins[i].type : '');
+  const smoothed = wins.map((w, i) => {
+    if (!w) return w;
+    const votes = [sym(i - 1), sym(i), sym(i + 1)].filter(Boolean);
+    const counts = {};
+    for (const v of votes) counts[v] = (counts[v] || 0) + 1;
+    const top = Object.entries(counts).sort((a, b) => b[1] - a[1])[0];
+    if (top[1] >= 2 && top[0] !== sym(i)) {
+      const m = top[0].match(/^(-?\d+)(.*)$/);
+      return { root: parseInt(m[1], 10), type: m[2], start: w.start, dur: w.dur };
     }
+    return w;
+  });
+  // Merge consecutive windows with the same chord; drop silent gaps.
+  const merged = [];
+  for (const w of smoothed) {
+    if (!w) continue;
+    const last = merged[merged.length - 1];
+    if (last && last.root === w.root && last.type === w.type) last.dur += w.dur;
+    else merged.push({ root: w.root, type: w.type, start: w.start, dur: w.dur });
   }
   return merged;
 }
 
-/* Krumhansl-Schmuckler key detection over transcribed notes (duration-weighted).
- * Returns { tonic (0-11), minor (bool), confidence (0-1), name }. */
+/* Key detection over transcribed notes.
+ * Robustness rules (this is what was wrong before — it guessed too early and
+ * trusted every pitch class equally):
+ *  - Waits for real evidence: >= 10 notes spanning >= 5 seconds, else null.
+ *  - Recent notes weigh more (the key is what it's in NOW, not a minute ago).
+ *  - The bass line gets extra weight: bass notes usually sit on chord roots,
+ *    the single strongest key clue in real music.
+ *  - Blends Krumhansl-Schmuckler correlation with diatonic coverage (share of
+ *    note weight on the key's 7 scale tones) — less fooled by one odd note.
+ *  - Refuses to call it when the top two keys are nearly tied (returns null).
+ * Returns { tonic (0-11), minor (bool), confidence (0-1), name, oneLiner } or null. */
 function detectKey(notes) {
+  if (!notes || notes.length < 10) return null;
+  const t0 = Math.min(...notes.map(n => n.start));
+  const t1 = Math.max(...notes.map(n => n.start + n.dur));
+  if (t1 - t0 < 5) return null;
+  const span = t1 - t0;
   const pc = new Array(12).fill(0);
-  for (const n of notes) pc[((n.midi % 12) + 12) % 12] += n.dur * (0.3 + (n.amp || 0.5));
+  for (const n of notes) {
+    const recency = 0.6 + 0.4 * (n.start - t0) / span;
+    pc[P(n.midi)] += n.dur * (0.3 + (n.amp || 0.5)) * recency;
+  }
+  for (let t = t0; t < t1; t += 0.5) {
+    let low = null;
+    for (const n of notes) {
+      if (n.start < t + 0.5 && n.start + n.dur > t && (low === null || n.midi < low)) low = n.midi;
+    }
+    if (low !== null) pc[P(low)] += 0.5;
+  }
+  // Compress: a single dominant pitch (e.g. a pedal bass) must not drown out
+  // the smaller notes that decide major vs minor. sqrt keeps order, tames spikes.
+  for (let p = 0; p < 12; p++) pc[p] = Math.sqrt(pc[p]);
   const total = pc.reduce((a, b) => a + b, 0);
   if (total <= 0) return null;
   const scored = [];
   for (let r = 0; r < 12; r++) {
-    scored.push({ tonic: r, minor: false, s: pearson(pc, rot(MAJ, r)) });
-    scored.push({ tonic: r, minor: true,  s: pearson(pc, rot(MIN, r)) });
+    for (const minor of [false, true]) {
+      const ks = pearson(pc, rot(minor ? MIN : MAJ, r));
+      const diaSet = minor ? DIA_MIN : DIA_MAJ;
+      let dia = 0;
+      for (const iv of diaSet) dia += pc[(r + iv) % 12];
+      dia /= total;
+      scored.push({ tonic: r, minor, s: 0.65 * ks + 0.35 * dia });
+    }
   }
   scored.sort((a, b) => b.s - a.s);
-  const top = scored[0], second = scored[1];
+  let top = scored[0];
+  const second = scored[1];
+  if (top.s - second.s < 0.04) {
+    // Nearly tied: if it's the classic relative major/minor ambiguity (same key
+    // signature), trust the tonic that's actually sounding instead of guessing.
+    const isRel = (a, b) =>
+      (!a.minor && b.minor && b.tonic === (a.tonic + 9) % 12) ||
+      (a.minor && !b.minor && b.tonic === (a.tonic + 3) % 12);
+    if (isRel(top, second)) top = pc[top.tonic] >= pc[second.tonic] ? top : second;
+    else return null; // genuinely ambiguous — keep listening
+  }
   const tonicName = NN[top.tonic];
-  const relName = top.minor ? NN[(top.tonic + 3) % 12] : null;
   return {
     tonic: top.tonic, minor: top.minor,
-    confidence: Math.max(0, Math.min(1, (top.s - second.s) * 2.5)),
+    confidence: Math.max(0, Math.min(1, (top.s - second.s) * 5)),
     name: tonicName + (top.minor ? ' minor' : ' major'),
-    oneLiner: top.minor ? `1 = ${relName}  (relative major)` : `Do = ${tonicName}`,
+    oneLiner: top.minor ? `1 = ${NN[(top.tonic + 3) % 12]} (relative major)` : `Do = ${tonicName}`,
   };
 }
 
 /* Find a repeating chord loop in a chord sequence.
  * Returns the loop (array of chords) once the tail contains >= 2 full cycles,
- * else null. Symbols compare root+type. */
+ * else null. Compares root+type, but treats 7th chords as their base triad —
+ * a melody note brushing the 7th shouldn't break an otherwise solid loop. */
 function detectLoop(chords, minCycles = 2) {
-  const syms = chords.map(c => c.root + c.type);
+  const norm = c => c.root + (c.type === '7' ? '' : c.type);
+  const syms = chords.map(norm);
   const n = syms.length;
   for (let p = 2; p <= 8 && p * minCycles <= n; p++) {
     let ok = true;
@@ -121,8 +192,8 @@ function detectLoop(chords, minCycles = 2) {
       if (syms[i] !== syms[i + p]) { ok = false; break; }
     }
     if (!ok) continue;
-    const loop = chords.slice(n - p);
-    if (new Set(loop.map(c => c.root + c.type)).size < 2) continue; // need >= 2 distinct chords
+    const loop = chords.slice(n - p).map(c => c.type === '7' ? { ...c, type: '' } : c);
+    if (new Set(loop.map(norm)).size < 2) continue; // need >= 2 distinct chords
     return loop;
   }
   return null;
@@ -173,7 +244,7 @@ function harmonize(melody, key, segSec = 1.6) {
     for (const n of melody) {
       if (n.start < s + segSec && n.start + n.dur > s) {
         const overlap = Math.min(n.start + n.dur, s + segSec) - Math.max(n.start, s);
-        pcs[((n.midi % 12) + 12) % 12] += overlap;
+        pcs[P(n.midi)] += overlap;
       }
     }
     if (pcs.reduce((a, b) => a + b, 0) <= 0) continue;

@@ -32,22 +32,22 @@ button:hover{transform:translateY(-1px);background:var(--gb)}button:active{trans
 button.go,button.on{background:var(--ink);color:var(--bg);border-color:var(--ink)}
 button:disabled{opacity:.45;cursor:default;transform:none}
 .bar{height:6px;background:var(--ln);border-radius:3px;overflow:hidden;margin:10px 0 4px}.bar i{display:block;height:100%;width:0;background:var(--ink);transition:width .3s}
-.row{display:flex;gap:10px;flex-wrap:wrap;margin-top:14px}
-.chip{background:var(--g);border:1px solid var(--gb);border-radius:20px;padding:10px 16px;text-align:center;min-width:76px}
-.chip b{display:block;font-size:1.6rem;letter-spacing:-.03em}.chip span{color:var(--mut);font-size:.85rem}
-.chip.cur{background:var(--ink);color:var(--bg)}.chip.cur span{color:var(--bg);opacity:.7}
 .nums{font-size:clamp(1.4rem,5vw,2rem);font-weight:700;letter-spacing:.04em;margin-top:6px;word-break:break-word}
-.badge{display:inline-block;font-size:.85rem;font-weight:600;padding:6px 12px;border-radius:999px;background:var(--ln);margin-top:10px}
 .pulse{animation:pl 1.6s ease-in-out infinite}@keyframes pl{50%{opacity:.45}}
 @media(max-width:640px){main{grid-template-columns:1fr}}
-.note{font-weight:700}
+.piano{position:relative;display:flex;gap:4px;height:170px;margin-top:12px;padding:12px;border-radius:26px;background:var(--g);-webkit-backdrop-filter:blur(24px) saturate(180%);backdrop-filter:blur(24px) saturate(180%);border:1px solid var(--gb);box-shadow:0 8px 30px rgba(0,0,0,.08);touch-action:manipulation}
+.wk,.bk{border:0;padding:0;transition:background .15s}
+.wk{flex:1;min-width:0;background:#fff;border-radius:0 0 14px 14px;box-shadow:0 1px 2px rgba(0,0,0,.06);display:flex;align-items:flex-end;justify-content:center;padding-bottom:10px;color:#8e8e93;font-size:.72rem;font-weight:600}
+.wk.on{background:#0a84ff;color:#fff}
+.bk{position:absolute;top:12px;height:96px;width:calc((100% - 24px)/14*.62);transform:translateX(-50%);background:#1c1c1e;border-radius:0 0 12px 12px;z-index:2}
+.bk.on{background:#0a84ff}
 </style></head><body><div class="atmos"><i></i><i></i></div><main>
 <header><h1>🎧 Play by Ear</h1><a href="index.html">← Right Key</a></header>
 
 <section class="card wide">
   <div class="mut">AI listener</div>
   <div class="q" id="status">Loading the neural net…</div>
-  <div class="sub" id="sub">First run downloads the model (~1&nbsp;MB) — needs internet once. Everything runs on your device after that.</div>
+  <div class="sub" id="sub">Warming up…</div>
   <div class="bar"><i id="loadbar"></i></div>
   <div class="btns">
     <button id="bListen" class="go" disabled>🎤 Listen to a song</button>
@@ -62,45 +62,42 @@ button:disabled{opacity:.45;cursor:default;transform:none}
 </section>
 
 <section class="card">
-  <div class="mut">Key it found</div>
+  <div class="mut">Key</div>
   <div class="root" id="key">–</div>
-  <div class="sub" id="keysub">Do = ?</div>
+  <div class="sub" id="keysub">Listening…</div>
 </section>
 
 <section class="card">
-  <div class="mut">Learning</div>
+  <div class="mut">Now playing</div>
   <div class="num" id="chord">–</div>
   <div class="q" id="learn">Waiting for music…</div>
   <div class="nums" id="prog">–</div>
 </section>
 
 <section class="card wide">
-  <div class="mut">Melody it's hearing</div>
+  <div class="mut">Melody</div>
   <div class="nums" id="melody">–</div>
-  <div class="mut" style="margin-top:16px">What I'll play back</div>
+  <div id="pi" class="piano"></div>
   <div class="sub" id="plan">Nothing learned yet.</div>
-</section>
-
-<section class="card wide">
-  <div class="mut">How it works</div>
-  <div class="sub">A pretrained neural net (<b>Spotify Basic Pitch</b>) hears the audio and writes down every note — pitch and timing. Then plain music theory takes over: the notes vote on the key, nearby notes get grouped into chords, and when a chord loop repeats it counts as "learned". Sing mode hears your melody, figures out the key, and invents chords that fit underneath it.<br><br>Best on piano, guitar, or singing. Full band mixes confuse it — drums have no pitch and the bass fights the chords.</div>
 </section>
 </main>
 
 <script src="ear-music.js"></script>
-<script type="module">
+<script>
 const $ = s => document.querySelector(s);
 const EM = window.EarMusic;
 const SR = 22050;
 
 let worker = null, modelReady = false;
 let actx = null, stream = null, capNode = null, micTimer = null;
-let pcm = null, pcmLen = 0, baseSec = 0;      // accumulated 22050 Hz mono; sample i is at baseSec + i/SR
-let workerBusy = false;                        // adaptive pump: only send when the worker is idle
+let pcm = null, pcmLen = 0, baseSec = 0;
+let workerBusy = false;
 let jobId = 0;
 let allNotes = [], seen = new Set();
 let chords = [], learned = null, keyInfo = null, mode = 'song';
 let loopOn = false, playTimers = [], playSrc = [];
+let lastMelodyMidi = -1;
+const pianoEl = {};
 
 // ---------- worker ----------
 function bootWorker() {
@@ -113,11 +110,10 @@ function onWorkerMsg(e) {
   const m = e.data;
   if (m.kind === 'ready') {
     modelReady = true;
-    const engine = 'neural net';
     setStatus(mode === 'sing'
       ? 'Ready — tap "Sing to me" and sing a tune'
       : 'Ready — tap "Listen to a song" and play music near the mic');
-    $('#sub').textContent = 'AI listener loaded (' + engine + '). Everything runs on your device.';
+    $('#sub').textContent = 'Background AI: hears the audio → writes down every note → votes on the key → groups notes into chords.';
     for (const id of ['bListen','bSing','bUpload','bReset']) $('#'+id).disabled = false;
     $('#loadbar').style.width = '100%';
   } else if (m.kind === 'notes') {
@@ -188,8 +184,6 @@ async function startMic(singMode) {
   pumpMic();
 }
 function pumpMic() {
-  // Adaptive: only send when the worker is idle, always the newest 4s.
-  // If inference is slower than realtime we skip stale audio instead of queueing up.
   if (workerBusy || !modelReady) return;
   if (pcmLen < SR * 4) return;
   const winLen = SR * 4;
@@ -197,7 +191,6 @@ function pumpMic() {
   const slice = pcm.slice(pcmLen - winLen, pcmLen);
   workerBusy = true;
   worker.postMessage({ kind: 'transcribe', id: ++jobId, pcm: slice, windowStart }, [slice.buffer]);
-  // Cap memory: keep roughly the last 60s of audio.
   if (pcmLen > SR * 90) {
     const drop = pcmLen - SR * 60;
     pcm.copyWithin(0, drop, pcmLen);
@@ -246,58 +239,74 @@ function ingestNotes(notes) {
     const k = n.midi + ':' + Math.round(n.start * 20);
     if (!seen.has(k)) { seen.add(k); allNotes.push(n); added++; }
   }
+  $('#sub').textContent = pipelineLine();
   if (added) analyze();
 }
+function pipelineLine() {
+  // What the AI is doing in the background, live.
+  const bits = ['hearing audio', allNotes.length + ' notes written'];
+  bits.push(keyInfo ? 'key found: ' + keyInfo.name : 'voting on the key…');
+  bits.push(chords.length ? chords.length + ' chords grouped' : 'grouping chords…');
+  if (learned) bits.push('loop learned ✓');
+  return 'AI · ' + bits.join(' → ');
+}
 function analyze() {
-  if (allNotes.length < 6) { setStatus('Listening… not enough notes yet', true); return; }
+  if (allNotes.length < 10) { setStatus('Listening… collecting notes (' + allNotes.length + '/10)', true); return; }
   keyInfo = EM.detectKey(allNotes);
   chords = EM.chordsOverTime(allNotes);
   const melody = EM.skyline(allNotes);
 
-  // Current chord = last chord.
   const cur = chords[chords.length - 1];
   $('#chord').textContent = cur ? EM.chordName(cur) : '–';
 
   if (keyInfo) {
     $('#key').textContent = keyInfo.name;
     $('#keysub').textContent = keyInfo.oneLiner + ' · ' + Math.round(keyInfo.confidence * 100) + '% sure';
+  } else {
+    $('#key').textContent = '–';
+    $('#keysub').textContent = 'Still listening — needs a few more notes…';
   }
 
-  // Melody readout: last 14 notes.
-  const tail = melody.slice(-14);
+  // Flowing melody: the latest notes stream across, newest last.
+  const tail = melody.slice(-16);
   $('#melody').textContent = tail.length ? tail.map(n => EM.midiToName(n.midi)).join(' ') : '–';
+  const top = tail[tail.length - 1];
+  if (top && top.midi !== lastMelodyMidi) { lastMelodyMidi = top.midi; flashPiano(top.midi, 900); }
 
-  let backing = null;
+  let shown = [];
   if (mode === 'sing') {
-    backing = EM.harmonize(melody, keyInfo);
+    const backing = EM.harmonize(melody, keyInfo).slice(0, 4);
     const sig = backing.map(c => c.root + c.type).join('|');
     if (backing.length >= 2 && sig !== (learned && learned.sig)) {
-      const t0m = melody.length ? melody[0].start : 0; // start playback at 0
+      const t0m = melody.length ? melody[0].start : 0;
       learned = {
         chords: backing.map(c => ({ ...c, start: c.start - t0m })),
         sig,
         melody: melody.map(n => ({ ...n, start: n.start - t0m })),
       };
-      onLearned('I found chords for your melody');
+      onLearned('Found chords for your melody');
     }
-    $('#prog').textContent = backing.length ? backing.map(EM.chordName).join(' → ') : '–';
+    shown = backing;
   } else {
     const loop = EM.detectLoop(chords);
     if (loop) {
-      const sig = loop.map(c => c.root + c.type).join('|');
+      const loop4 = loop.slice(0, 4);
+      const sig = loop4.map(c => c.root + c.type).join('|');
       if (sig !== (learned && learned.sig)) {
-        const ls = loop[0].start, le = loop[loop.length - 1].start + loop[loop.length - 1].dur;
+        const ls = loop4[0].start, le = loop4[loop4.length - 1].start + loop4[loop4.length - 1].dur;
         const loopMelody = melody.filter(n => n.start >= ls - 0.1 && n.start < le + 0.3)
           .map(n => ({ ...n, start: n.start - ls }));
-        learned = { chords: loop.map(c => ({ ...c, start: c.start - ls })), sig, melody: loopMelody, loopDur: le - ls };
+        learned = { chords: loop4.map(c => ({ ...c, start: c.start - ls })), sig, melody: loopMelody, loopDur: le - ls };
         onLearned('Heard the loop repeat — got it');
       }
     }
-    $('#prog').textContent = chords.length ? chords.slice(-8).map(EM.chordName).join(' → ') : '–';
+    shown = loop ? loop.slice(0, 4) : chords.slice(-4);
   }
+  $('#prog').textContent = shown.length ? shown.map(EM.chordName).join(' → ') : '–';
 
   $('#learn').textContent = learnLine();
   updatePlan();
+  $('#sub').textContent = pipelineLine();
   if (allNotes.length) setStatus(learned ? 'Learned ✓ — tap "Play it back"' : 'Listening… ' + learnLine(), !learned);
 }
 function learnLine() {
@@ -327,6 +336,37 @@ function numOf(c, key) {
   return map[deg] || EM.chordName(c);
 }
 
+// ---------- piano ----------
+function buildPiano() {
+  const pi = $('#pi');
+  const whites = [60,62,64,65,67,69,71,72,74,76,77,79,81,83];
+  const blacks = [61,63,66,68,70,73,75,78,80,82];
+  const names = ['C','D','E','F','G','A','B'];
+  whites.forEach(m => {
+    const k = document.createElement('div');
+    k.className = 'wk'; k.dataset.midi = m;
+    k.textContent = names[[0,2,4,5,7,9,11].indexOf(m % 12)];
+    pi.appendChild(k); pianoEl[m] = k;
+  });
+  blacks.forEach(m => {
+    const wi = whites.filter(w => w < m).length;
+    const k = document.createElement('div');
+    k.className = 'bk'; k.dataset.midi = m;
+    k.style.left = 'calc(12px + (100% - 24px) * ' + (wi / whites.length) + ')';
+    pi.appendChild(k); pianoEl[m] = k;
+  });
+}
+function flashPiano(midi, ms) {
+  const el = pianoEl[midi];
+  if (!el) return;
+  el.classList.add('on');
+  setTimeout(() => el.classList.remove('on'), ms || 700);
+}
+function scheduleFlash(midi, whenSec, ms) {
+  const delay = Math.max(0, (whenSec - actx.currentTime) * 1000);
+  playTimers.push(setTimeout(() => flashPiano(midi, ms), delay));
+}
+
 // ---------- playback ----------
 function pianoNote(midi, when, dur, vel) {
   const f = EM.midiToFreq(midi);
@@ -346,7 +386,7 @@ function pianoNote(midi, when, dur, vel) {
   playSrc.push(o1, o2);
 }
 function triadMidi(c) {
-  const base = 48 + c.root; // around C3–B3
+  const base = 48 + c.root;
   const third = c.type === 'm' || c.type === 'dim' ? 3 : 4;
   const fifth = c.type === 'dim' ? 6 : 7;
   const notes = [base, base + third, base + fifth];
@@ -358,13 +398,15 @@ function playBack() {
   ensureCtx();
   stopPlayback();
   const t0 = actx.currentTime + 0.15;
-  // Chords: soft bed under the melody.
   for (const c of learned.chords) {
-    for (const m of triadMidi(c)) pianoNote(m, t0 + c.start, Math.min(c.dur + 0.4, 3), 0.16);
+    for (const m of triadMidi(c)) {
+      pianoNote(m, t0 + c.start, Math.min(c.dur + 0.4, 3), 0.16);
+      scheduleFlash(m + 12, t0 + c.start, Math.min(c.dur, 2.5) * 1000);
+    }
   }
-  // Melody: the transcribed line, one octave feel via natural register.
   for (const n of learned.melody) {
     pianoNote(n.midi, t0 + n.start, Math.min(n.dur + 0.25, 2.5), 0.5);
+    scheduleFlash(n.midi, t0 + n.start, Math.min(n.dur + 0.3, 1.5) * 1000);
   }
   const total = Math.max(
     ...learned.chords.map(c => c.start + c.dur),
@@ -377,6 +419,7 @@ function stopPlayback() {
   playTimers.forEach(clearTimeout); playTimers = [];
   playSrc.forEach(o => { try { o.stop(); } catch (e) {} });
   playSrc = [];
+  for (const m in pianoEl) pianoEl[m].classList.remove('on');
 }
 
 // ---------- misc ----------
@@ -388,12 +431,14 @@ function reset() {
   stopMic(); stopPlayback();
   pcm = null; pcmLen = 0; baseSec = 0; workerBusy = false;
   allNotes = []; seen = new Set(); chords = []; learned = null; keyInfo = null;
-  $('#key').textContent = '–'; $('#keysub').textContent = 'Do = ?';
+  lastMelodyMidi = -1;
+  $('#key').textContent = '–'; $('#keysub').textContent = 'Listening…';
   $('#chord').textContent = '–'; $('#prog').textContent = '–'; $('#melody').textContent = '–';
   $('#learn').textContent = 'Waiting for music…'; $('#plan').textContent = 'Nothing learned yet.';
   $('#bPlay').disabled = true; $('#bLoop').disabled = true;
   loopOn = false; $('#bLoop').textContent = '🔁 Loop: off';
   setStatus(modelReady ? 'Ready — tap Listen, Sing, or Upload' : 'Loading the neural net…');
+  if (modelReady) $('#sub').textContent = 'Background AI: hears the audio → writes down every note → votes on the key → groups notes into chords.';
 }
 
 // ---------- wire up ----------
@@ -406,6 +451,7 @@ $('#bPlay').onclick = playBack;
 $('#bLoop').onclick = () => { loopOn = !loopOn; $('#bLoop').textContent = '🔁 Loop: ' + (loopOn ? 'on' : 'off'); };
 $('#bReset').onclick = reset;
 
+buildPiano();
 setStatus('Loading the neural net…', true);
 $('#loadbar').style.width = '35%';
 bootWorker();
