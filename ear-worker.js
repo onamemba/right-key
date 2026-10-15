@@ -20,16 +20,24 @@ let backendTried = false;
 async function ensureBackend() {
   if (backendTried) return;
   backendTried = true;
+  // Try the fast WASM engine first — but VERIFY it with a real calculation.
+  // tf.ready() can resolve even when the backend is broken (it then fails
+  // later with cryptic errors like "Unknown dtype undefined"), so we run
+  // a smoke-test op and fall back to CPU unless it genuinely works.
   try {
     setWasmPaths('https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-backend-wasm@3.19.0/dist/');
     await tf.setBackend('wasm');
     await tf.ready();
-  } catch (err) {
-    // WASM unavailable (old browser, blocked CDN) — fall back to CPU.
-  }
-  if (tf.getBackend() !== 'wasm') {
-    try { await tf.setBackend('cpu'); await tf.ready(); } catch (e) { /* keep default */ }
-  }
+    const t = tf.tensor1d([1, 2, 3], 'float32');
+    const s = tf.add(t, 1).sum();
+    const v = await s.data();
+    t.dispose(); s.dispose();
+    if (v[0] === 9) { backendName = 'wasm'; return; }
+  } catch (err) { /* fall through to CPU */ }
+  try {
+    await tf.setBackend('cpu');
+    await tf.ready();
+  } catch (e) { /* keep whatever the default is */ }
   backendName = tf.getBackend();
 }
 
