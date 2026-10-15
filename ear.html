@@ -4,12 +4,18 @@
 <meta name="mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-capable" content="yes">
 <title>Right Key — Play by Ear</title>
 <style>
-:root{--bg:#f2f2f7;--ink:#000;--mut:#6c6c70;--g:rgba(255,255,255,.62);--gb:rgba(255,255,255,.8);--ln:rgba(0,0,0,.08);--b1:#d9dde8;--b2:#eadfe4;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
-@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#000;--ink:#fff;--mut:#98989f;--g:rgba(44,44,46,.55);--gb:rgba(255,255,255,.14);--ln:rgba(255,255,255,.1);--b1:#2a2a30;--b2:#1c1c22}}
-:root[data-theme="dark"]{--bg:#000;--ink:#fff;--mut:#98989f;--g:rgba(44,44,46,.55);--gb:rgba(255,255,255,.14);--ln:rgba(255,255,255,.1);--b1:#2a2a30;--b2:#1c1c22}
+:root{--bg:#f5f3f5;--ink:#000;--mut:#6c6c70;--g:rgba(255,255,255,.62);--gb:rgba(255,255,255,.8);--ln:rgba(0,0,0,.08);--c1:#f6cfa8;--c2:#f4c3d6;--c3:#d8cdf5;--c4:#f7efb8;--c5:#cfe3f6;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#000;--ink:#fff;--mut:#98989f;--g:rgba(44,44,46,.55);--gb:rgba(255,255,255,.14);--ln:rgba(255,255,255,.1);--c1:#5a3b2a;--c2:#5a2b44;--c3:#34285c;--c4:#4f4a22;--c5:#1f3a55}}
+:root[data-theme="dark"]{--bg:#000;--ink:#fff;--mut:#98989f;--g:rgba(44,44,46,.55);--gb:rgba(255,255,255,.14);--ln:rgba(255,255,255,.1);--c1:#5a3b2a;--c2:#5a2b44;--c3:#34285c;--c4:#4f4a22;--c5:#1f3a55}
 *{box-sizing:inherit;-webkit-tap-highlight-color:transparent}
-body{margin:0;min-height:100vh;color:var(--ink);font:17px/1.35 -apple-system,BlinkMacSystemFont,"SF Pro Display","Helvetica Neue",Arial,sans-serif;background:radial-gradient(60% 40% at 15% 0%,var(--b1),transparent),radial-gradient(50% 40% at 90% 30%,var(--b2),transparent),var(--bg);background-attachment:fixed}
-main{max-width:860px;margin:0 auto;padding:18px 16px 40px;display:grid;gap:14px;grid-template-columns:1fr 1fr}
+body{margin:0;min-height:100vh;color:var(--ink);font:17px/1.35 -apple-system,BlinkMacSystemFont,"SF Pro Display","Helvetica Neue",Arial,sans-serif;background:var(--bg)}
+.atmos{position:fixed;inset:0;z-index:0;overflow:hidden;pointer-events:none}
+.atmos i{position:absolute;inset:-35%;filter:blur(48px);will-change:transform}
+.atmos i:nth-child(1){background:radial-gradient(40% 35% at 25% 30%,var(--c1),transparent 70%),radial-gradient(35% 30% at 75% 25%,var(--c2),transparent 70%),radial-gradient(40% 35% at 70% 75%,var(--c3),transparent 70%);animation:spin 90s linear infinite}
+.atmos i:nth-child(2){background:radial-gradient(35% 30% at 30% 75%,var(--c4),transparent 70%),radial-gradient(30% 28% at 80% 55%,var(--c5),transparent 70%);animation:spin 140s linear infinite reverse}
+@keyframes spin{to{transform:rotate(360deg)}}
+@media (prefers-reduced-motion:reduce){.atmos i{animation:none}}
+main{position:relative;z-index:1;max-width:860px;margin:0 auto;padding:18px 16px 40px;display:grid;gap:14px;grid-template-columns:1fr 1fr}
 header{grid-column:1/-1;display:flex;justify-content:space-between;align-items:center;gap:10px}
 h1{font-size:1.9rem;letter-spacing:-.02em;margin:0}
 header a{color:var(--mut);text-decoration:none;font-weight:600;font-size:.95rem}
@@ -35,7 +41,7 @@ button:disabled{opacity:.45;cursor:default;transform:none}
 .pulse{animation:pl 1.6s ease-in-out infinite}@keyframes pl{50%{opacity:.45}}
 @media(max-width:640px){main{grid-template-columns:1fr}}
 .note{font-weight:700}
-</style></head><body><main>
+</style></head><body><div class="atmos"><i></i><i></i></div><main>
 <header><h1>🎧 Play by Ear</h1><a href="index.html">← Right Key</a></header>
 
 <section class="card wide">
@@ -107,7 +113,7 @@ function onWorkerMsg(e) {
   const m = e.data;
   if (m.kind === 'ready') {
     modelReady = true;
-    const engine = m.backend === 'wasm' ? 'neural net (fast mode)' : 'neural net (compatibility mode)';
+    const engine = 'neural net';
     setStatus(mode === 'sing'
       ? 'Ready — tap "Sing to me" and sing a tune'
       : 'Ready — tap "Listen to a song" and play music near the mic');

@@ -10,7 +10,6 @@
  * to the copy of tfjs bundled inside @spotify/basic-pitch.
  */
 import * as tf from 'https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@3.19.0/+esm';
-import { setWasmPaths } from 'https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-backend-wasm@3.19.0/+esm';
 import { BasicPitch, outputToNotesPoly, noteFramesToTime } from 'https://cdn.jsdelivr.net/npm/@spotify/basic-pitch@1.0.1/+esm';
 
 let bp = null;
@@ -20,24 +19,16 @@ let backendTried = false;
 async function ensureBackend() {
   if (backendTried) return;
   backendTried = true;
-  // Try the fast WASM engine first — but VERIFY it with a real calculation.
-  // tf.ready() can resolve even when the backend is broken (it then fails
-  // later with cryptic errors like "Unknown dtype undefined"), so we run
-  // a smoke-test op and fall back to CPU unless it genuinely works.
-  try {
-    setWasmPaths('https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-backend-wasm@3.19.0/dist/');
-    await tf.setBackend('wasm');
-    await tf.ready();
-    const t = tf.tensor1d([1, 2, 3], 'float32');
-    const s = tf.add(t, 1).sum();
-    const v = await s.data();
-    t.dispose(); s.dispose();
-    if (v[0] === 9) { backendName = 'wasm'; return; }
-  } catch (err) { /* fall through to CPU */ }
+  // NOTE 2026-10-14: the WASM backend passes a smoke test but then fails
+  // inside Basic Pitch's inference with "Unknown dtype undefined" — an
+  // op-level incompatibility in tfjs 3.19.0's WASM kernels for this model
+  // (verified: CPU transcribes the same audio correctly). The CPU backend is
+  // ~2x slower than realtime, but correct; the adaptive mic pump in ear.html
+  // skips stale audio so the app stays usable.
   try {
     await tf.setBackend('cpu');
     await tf.ready();
-  } catch (e) { /* keep whatever the default is */ }
+  } catch (e) { /* keep default */ }
   backendName = tf.getBackend();
 }
 
