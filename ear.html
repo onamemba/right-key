@@ -48,19 +48,19 @@ button:disabled{opacity:.45;cursor:default;transform:none}
 <header><h1>🎧 Play by Ear</h1><a href="index.html">← Right Key</a></header>
 
 <section class="card wide">
-  <div class="mut">AI listener</div>
-  <div class="q" id="status">Loading the neural net…</div>
-  <div class="sub" id="sub">Warming up…</div>
+  <div class="mut">Listener</div>
+  <div class="q" id="status">Ready — tap Listen, Sing, or Upload.</div>
+  <div class="sub" id="sub">Listens to the sound itself — key, chords, loop and tempo, live.</div>
   <div class="bar"><i id="loadbar"></i></div>
   <div class="btns">
-    <button id="bListen" class="go" disabled>🎤 Listen to a song</button>
-    <button id="bSing" disabled>🎙 Sing to me</button>
-    <button id="bUpload" disabled>📁 Upload audio</button>
+    <button id="bListen" class="go">🎤 Listen to a song</button>
+    <button id="bSing">🎙 Sing to me</button>
+    <button id="bUpload">📁 Upload audio</button>
     <input type="file" id="file" accept="audio/*" hidden>
     <button id="bStop" disabled>⏹ Stop</button>
     <button id="bPlay" class="go" disabled>🎹 Play along</button>
     <button id="bLoop" disabled>🔁 Loop: on</button>
-    <button id="bReset" disabled>Reset</button>
+    <button id="bReset">Reset</button>
   </div>
 </section>
 
@@ -86,253 +86,175 @@ button:disabled{opacity:.45;cursor:default;transform:none}
 </section>
 </main>
 
+<script src="ear-dsp.js"></script>
 <script src="ear-music.js"></script>
 <script>
 const $ = s => document.querySelector(s);
 const EM = window.EarMusic;
-const SR = 22050;
 
-let worker = null, modelReady = false;
-let actx = null, stream = null, capNode = null, micTimer = null;
-let pcm = null, pcmLen = 0, baseSec = 0;
-let workerBusy = false;
-let jobId = 0;
-let allNotes = [], seen = new Set();
-let chords = [], learned = null, keyInfo = null, tempoInfo = null, mode = 'song';
-let songBuffer = null, songSource = null;
+let ear = EarDSP.create();
+let actx = null, analyser = null, micStream = null, songSource = null, songBuffer = null;
+let fb = null, tb = null, rafId = null;
+let mode = 'song';               // 'song' | 'sing'
+let listening = false, songStartCtx = 0;
+let chordTimeline = [];          // { r, t, start } song-relative seconds (upload) or session seconds (mic)
+let sessionT0 = 0;
+let learned = null;              // { chords:[4], key, bpm }
 let playing = false, loopOn = true, playTimers = [], playSrc = [];
 let pianoBus = null;
 const pianoEl = {};
 
-// ---------- worker ----------
-function bootWorker() {
-  worker = new Worker('ear-worker.js', { type: 'module' });
-  worker.onmessage = onWorkerMsg;
-  worker.onerror = (e) => setStatus('Model failed to start: ' + (e.message || 'worker error'));
-  worker.postMessage({ kind: 'init' });
-}
-function onWorkerMsg(e) {
-  const m = e.data;
-  if (m.kind === 'ready') {
-    modelReady = true;
-    setStatus(mode === 'sing'
-      ? 'Ready — tap "Sing to me" and sing a tune'
-      : 'Ready — tap "Listen to a song" and play music near the mic');
-    $('#sub').textContent = 'Background AI: hears the audio → writes down every note → votes on the key → groups notes into chords → feels the tempo.';
-    for (const id of ['bListen','bSing','bUpload','bReset']) $('#'+id).disabled = false;
-    $('#loadbar').style.width = '100%';
-  } else if (m.kind === 'notes') {
-    workerBusy = false;
-    ingestNotes(m.notes);
-  } else if (m.kind === 'error') {
-    workerBusy = false;
-    setStatus('Transcription hiccup: ' + m.message);
-  }
-}
-
-// ---------- audio input ----------
+// ---------- audio plumbing ----------
 function ensureCtx() {
   if (!actx) actx = new (window.AudioContext || window.webkitAudioContext)();
   if (actx.state === 'suspended') actx.resume();
   return actx;
 }
-function resampleTo22050(input, inRate) {
-  if (inRate === SR) return input;
-  const ratio = inRate / SR, outLen = Math.floor(input.length / ratio);
-  const out = new Float32Array(outLen);
-  for (let i = 0; i < outLen; i++) {
-    const p = i * ratio, i0 = Math.floor(p), f = p - i0;
-    out[i] = input[i0] * (1 - f) + (input[Math.min(i0 + 1, input.length - 1)] * f);
+function ensureAnalyser() {
+  ensureCtx();
+  if (!analyser) {
+    analyser = actx.createAnalyser();
+    analyser.fftSize = 16384;
+    analyser.smoothingTimeConstant = 0;
+    fb = new Float32Array(analyser.frequencyBinCount);
+    tb = new Float32Array(analyser.fftSize);
   }
-  return out;
+  return analyser;
 }
-function pushPCM(chunk) {
-  const need = pcmLen + chunk.length;
-  if (!pcm || pcm.length < need) {
-    const bigger = new Float32Array(Math.max(need, (pcm ? pcm.length : 0) * 2 || SR * 30));
-    if (pcm) bigger.set(pcm.subarray(0, pcmLen));
-    pcm = bigger;
+function nowSec() { return actx.currentTime - sessionT0; }
+
+function analyzeFrame() {
+  if (!listening) return;
+  rafId = requestAnimationFrame(analyzeFrame);
+  analyser.getFloatFrequencyData(fb);
+  analyser.getFloatTimeDomainData(tb);
+  const t = nowSec();
+  const ev = ear.frame(fb, tb, actx.sampleRate, analyser.fftSize, performance.now(), t);
+  if (ev.chord) {
+    const c = ev.chord;
+    chordTimeline.push({ r: c.r, t: c.t, start: t });
+    $('#chord').textContent = EarDSP.chordName(c);
+    updateProgression();
   }
-  pcm.set(chunk, pcmLen); pcmLen += chunk.length;
+  if (ev.keyChanged || ev.chord) updateKey();
+  if (ev.loopFound && !learned) onLoopLearned();
+  updateTempo();
+  $('#sub').textContent = pipelineLine();
 }
+function updateKey() {
+  const k = ear.getKey();
+  if (k && !k.early) {
+    $('#key').textContent = k.name;
+    $('#keysub').textContent = k.oneLiner;
+  } else if (k) {
+    $('#key').textContent = k.name + '?';
+    $('#keysub').textContent = 'Early guess — keep playing…';
+  }
+}
+function updateProgression() {
+  const loop = ear.getLoop();
+  const shown = loop ? loop.slice(0, 4) : chordTimeline.slice(-4);
+  $('#prog').textContent = shown.length ? shown.map(EarDSP.chordName).join(' → ') : '–';
+  if (shown.length && !learned) $('#learn').textContent = 'Heard ' + chordTimeline.length + ' chord changes — waiting for the loop…';
+}
+function updateTempo() {
+  const tp = ear.getTempo();
+  if (tp) $('#bpm').textContent = '♪ ' + tp.bpm + ' BPM';
+}
+function pipelineLine() {
+  const st = ear.getStats();
+  const k = ear.getKey();
+  const bits = ['listening', st.frames + ' frames'];
+  bits.push(k && !k.early ? 'key: ' + k.name : 'finding the key…');
+  bits.push(chordTimeline.length ? chordTimeline.length + ' chords' : 'hearing chords…');
+  const tp = ear.getTempo();
+  bits.push(tp ? tp.bpm + ' BPM' : 'feeling the tempo…');
+  if (learned) bits.push('loop learned ✓');
+  return bits.join(' → ');
+}
+function onLoopLearned() {
+  const loop = ear.getLoop().slice(0, 4);
+  const k = ear.getKey(), tp = ear.getTempo();
+  // Chord durations from the timeline: how long each chord lasted when heard.
+  const durs = loop.map((c) => {
+    const cur = chordTimeline.filter(x => x.r === c.r && x.t === c.t).pop();
+    const nxt = cur ? chordTimeline[chordTimeline.indexOf(cur) + 1] : null;
+    return (nxt ? nxt.start - cur.start : 2);
+  });
+  learned = {
+    chords: loop.map((c, i) => ({ r: c.r, t: c.t, dur: Math.min(8, Math.max(0.6, durs[i] || 2)) })),
+    key: k, bpm: tp ? tp.bpm : null,
+  };
+  $('#learn').textContent = '✓ Loop learned — tap "Play along" to join the band';
+  $('#bPlay').disabled = false;
+  $('#bLoop').disabled = false;
+  updatePlan();
+  setStatus('Learned ✓ — you\'re up. Tap "Play along".');
+}
+
+// ---------- mic / upload ----------
 async function startMic(singMode) {
-  if (!modelReady) return;
   reset();
   mode = singMode ? 'sing' : 'song';
-  songBuffer = null;
-  ensureCtx();
+  ensureAnalyser();
   try {
-    stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false } });
-  } catch (err) {
-    setStatus('Mic blocked — allow microphone access and try again.');
-    return;
-  }
-  const src = actx.createMediaStreamSource(stream);
-  const rate = actx.sampleRate;
-  let useWorklet = true;
-  try {
-    const code = `class Cap extends AudioWorkletProcessor{process(i){const c=i[0]&&i[0][0];if(c)this.port.postMessage(c.slice(0));return true}}registerProcessor('earcap',Cap);`;
-    await actx.audioWorklet.addModule(URL.createObjectURL(new Blob([code], { type: 'application/javascript' })));
-    capNode = new AudioWorkletNode(actx, 'earcap');
-    capNode.port.onmessage = (e) => pushPCM(resampleTo22050(e.data, rate));
-  } catch (err) {
-    useWorklet = false;
-  }
-  if (!useWorklet) {
-    capNode = actx.createScriptProcessor(4096, 1, 1);
-    capNode.onaudioprocess = (e) => pushPCM(resampleTo22050(e.inputBuffer.getChannelData(0), rate));
-  }
-  src.connect(capNode); capNode.connect(actx.destination);
+    micStream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false } });
+  } catch (e) { setStatus('Mic blocked — allow microphone access and try again.'); return; }
+  const src = actx.createMediaStreamSource(micStream);
+  src.connect(analyser);
+  sessionT0 = actx.currentTime;
+  listening = true;
   $('#bListen').disabled = $('#bSing').disabled = $('#bUpload').disabled = true;
   $('#bStop').disabled = false;
   setStatus(mode === 'sing' ? '🎙 Listening — sing something…' : '🎤 Listening — play the song…', true);
-  micTimer = setInterval(pumpMic, 2000);
-  pumpMic();
+  $('#loadbar').style.width = '100%';
+  analyzeFrame();
 }
-function pumpMic() {
-  if (workerBusy || !modelReady) return;
-  if (pcmLen < SR * 4) return;
-  const winLen = SR * 4;
-  const windowStart = baseSec + (pcmLen - winLen) / SR;
-  const slice = pcm.slice(pcmLen - winLen, pcmLen);
-  workerBusy = true;
-  worker.postMessage({ kind: 'transcribe', id: ++jobId, pcm: slice, windowStart }, [slice.buffer]);
-  if (pcmLen > SR * 90) {
-    const drop = pcmLen - SR * 60;
-    pcm.copyWithin(0, drop, pcmLen);
-    pcmLen -= drop;
-    baseSec += drop / SR;
-  }
-}
-function stopMic() {
-  clearInterval(micTimer); micTimer = null;
-  if (stream) stream.getTracks().forEach(t => t.stop());
-  if (capNode) { try { capNode.disconnect(); } catch (e) {} }
-  capNode = null; stream = null;
-  $('#bListen').disabled = $('#bSing').disabled = $('#bUpload').disabled = modelReady ? false : true;
+function stopListening() {
+  listening = false;
+  if (rafId) cancelAnimationFrame(rafId);
+  rafId = null;
+  if (micStream) micStream.getTracks().forEach(t => t.stop());
+  micStream = null;
+  if (songSource) { try { songSource.stop(); } catch (e) {} songSource = null; }
+  try { analyser && analyser.disconnect(); } catch (e) {}
+  $('#bListen').disabled = $('#bSing').disabled = $('#bUpload').disabled = false;
   $('#bStop').disabled = true;
-  if (allNotes.length) setStatus('Stopped. ' + learnLine());
 }
 async function uploadFile(file) {
-  if (!modelReady || !file) return;
+  if (!file) return;
   reset();
   mode = 'song';
-  ensureCtx();
+  ensureAnalyser();
   setStatus('Decoding ' + file.name + '…', true);
   try {
     const buf = await file.arrayBuffer();
-    const ab = await actx.decodeAudioData(buf);
-    songBuffer = ab; // keep it — the band plays it back while you play piano
-    let ch = ab.getChannelData(0);
-    if (ab.numberOfChannels > 1) {
-      const c1 = ab.getChannelData(1), mix = new Float32Array(ch.length);
-      for (let i = 0; i < ch.length; i++) mix[i] = (ch[i] + c1[i]) / 2;
-      ch = mix;
-    }
-    const mono = resampleTo22050(ch, ab.sampleRate);
-    setStatus('Transcribing ' + file.name + ' — the neural net is listening…', true);
-    $('#bStop').disabled = false;
-    workerBusy = true;
-    worker.postMessage({ kind: 'transcribe', id: ++jobId, pcm: mono, windowStart: 0 }, [mono.buffer]);
-  } catch (err) {
-    setStatus('Could not read that file: ' + err.message);
-  }
+    songBuffer = await actx.decodeAudioData(buf);
+  } catch (e) { setStatus('Could not read that file.'); return; }
+  songSource = actx.createBufferSource();
+  songSource.buffer = songBuffer;
+  songSource.connect(analyser);
+  analyser.connect(actx.destination); // you hear it while it learns
+  sessionT0 = actx.currentTime + 0.1;
+  songSource.start(sessionT0);
+  songSource.onended = () => { if (listening) { stopListening(); setStatus('Song ended. ' + ($('#bPlay').disabled ? 'Not enough repetition to learn the loop — try a longer section.' : 'Tap "Play along".')); } };
+  listening = true;
+  $('#bListen').disabled = $('#bSing').disabled = $('#bUpload').disabled = true;
+  $('#bStop').disabled = false;
+  setStatus('🎧 Learning "' + file.name + '" as it plays…', true);
+  $('#loadbar').style.width = '100%';
+  analyzeFrame();
 }
 
-// ---------- analysis ----------
-function ingestNotes(notes) {
-  let added = 0;
-  for (const n of notes) {
-    const k = n.midi + ':' + Math.round(n.start * 20);
-    if (!seen.has(k)) { seen.add(k); allNotes.push(n); added++; }
-  }
-  $('#sub').textContent = pipelineLine();
-  if (added) analyze();
-}
-function pipelineLine() {
-  const bits = ['hearing audio', allNotes.length + ' notes written'];
-  bits.push(keyInfo ? 'key found: ' + keyInfo.name : 'voting on the key…');
-  bits.push(chords.length ? chords.length + ' chords grouped' : 'grouping chords…');
-  bits.push(tempoInfo ? 'feeling ' + tempoInfo.bpm + ' BPM' : 'feeling the tempo…');
-  if (learned) bits.push('loop learned ✓');
-  return 'AI · ' + bits.join(' → ');
-}
-function analyze() {
-  if (allNotes.length < 10) { setStatus('Listening… collecting notes (' + allNotes.length + '/10)', true); return; }
-  keyInfo = EM.detectKey(allNotes);
-  chords = EM.chordsOverTime(allNotes);
-  tempoInfo = EM.detectTempo(allNotes);
-  const melody = EM.skyline(allNotes);
-
-  const cur = chords[chords.length - 1];
-  $('#chord').textContent = cur ? EM.chordName(cur) : '–';
-  $('#bpm').textContent = tempoInfo ? '♪ ' + tempoInfo.bpm + ' BPM' : '';
-
-  if (keyInfo) {
-    $('#key').textContent = keyInfo.name;
-    $('#keysub').textContent = keyInfo.oneLiner + ' · ' + Math.round(keyInfo.confidence * 100) + '% sure';
-  } else {
-    $('#key').textContent = '–';
-    $('#keysub').textContent = 'Still listening — needs a few more notes…';
-  }
-
-  let shown = [];
-  if (mode === 'sing') {
-    const backing = EM.harmonize(melody, keyInfo).slice(0, 4);
-    const sig = backing.map(c => c.root + c.type).join('|');
-    if (backing.length >= 2 && sig !== (learned && learned.sig)) {
-      const t0m = melody.length ? melody[0].start : 0;
-      learned = {
-        chords: backing.map(c => ({ ...c, start: c.start - t0m })),
-        sig,
-      };
-      onLearned('Found chords for your melody');
-    }
-    shown = backing;
-  } else {
-    const loop = EM.detectLoop(chords);
-    if (loop) {
-      const loop4 = loop.slice(0, 4);
-      const sig = loop4.map(c => c.root + c.type).join('|');
-      if (sig !== (learned && learned.sig)) {
-        const ls = loop4[0].start;
-        learned = { chords: loop4.map(c => ({ ...c, start: c.start - ls })), sig, loopDur: loop4.reduce((a, c) => a + c.dur, 0) };
-        onLearned('Heard the loop repeat — got it');
-      }
-    }
-    shown = loop ? loop.slice(0, 4) : chords.slice(-4);
-  }
-  $('#prog').textContent = shown.length ? shown.map(EM.chordName).join(' → ') : '–';
-
-  $('#learn').textContent = learnLine();
-  updatePlan();
-  $('#sub').textContent = pipelineLine();
-  if (allNotes.length) setStatus(learned ? 'Learned ✓ — tap "Play along" to join the band' : 'Listening… ' + learnLine(), !learned);
-}
-function learnLine() {
-  if (learned) return mode === 'sing' ? 'Chords found for your melody ✓' : 'Loop learned ✓ (' + learned.chords.length + ' chords)';
-  if (!chords.length) return 'No chords yet…';
-  return 'Heard ' + chords.length + ' chord changes — waiting for the loop to repeat…';
-}
-function onLearned(msg) {
-  $('#learn').textContent = '✓ ' + msg;
-  $('#learn').classList.remove('pulse');
-  $('#bPlay').disabled = false;
-  $('#bLoop').disabled = false;
-}
-function updatePlan() {
-  if (!learned || !keyInfo) { $('#plan').textContent = 'Nothing learned yet.'; return; }
-  const nums = learned.chords.map(c => numOf(c, keyInfo)).join(' – ');
-  $('#plan').textContent = learned.chords.map(EM.chordName).join(' – ') +
-    '  ·  ' + nums + '  ·  in ' + keyInfo.name +
-    (tempoInfo ? '  ·  ' + tempoInfo.bpm + ' BPM' : '');
-}
-function numOf(c, key) {
-  const deg = (c.root - key.tonic + 12) % 12;
-  const map = key.minor
-    ? { 0: '1', 2: '2', 3: '3', 5: '4', 7: '5', 8: '6', 10: '7' }
-    : { 0: '1', 2: '2', 4: '3', 5: '4', 7: '5', 9: '6', 11: '7' };
-  return map[deg] || EM.chordName(c);
+// ---------- sing mode harmony ----------
+function singBacking() {
+  // Build chords from the tracked pitch melody + detected key.
+  const mel = ear.getMelody().map(m => ({ midi: m.midi, start: m.at, dur: 0.4 }));
+  const k = ear.getKey();
+  if (!mel.length || !k || k.early) return [];
+  const key = { tonic: k.k, minor: !!k.m };
+  return EM.harmonize(mel, key).slice(0, 4)
+    .map(c => ({ r: c.root, t: c.type, dur: c.dur, start: c.start }));
 }
 
 // ---------- piano ----------
@@ -379,12 +301,10 @@ function makeImpulse(dur, decay) {
   }
   return buf;
 }
-/* Grand-piano-ish voice: stacked harmonics with their own decays, gentle
- * chorus on the fundamental, and the sustain pedal down — notes ring. */
 function pianoNote(midi, when, dur, vel) {
   initPiano();
   const f = EM.midiToFreq(midi);
-  const ring = Math.max(dur, 1.1) + 1.8; // sustain on: everything rings
+  const ring = Math.max(dur, 1.1) + 1.8; // sustain pedal down
   const out = actx.createGain();
   out.gain.setValueAtTime(0.0001, when);
   out.gain.exponentialRampToValueAtTime(Math.max(vel, 0.001), when + 0.006);
@@ -393,34 +313,30 @@ function pianoNote(midi, when, dur, vel) {
   const partials = [[1, 1.0, 1.0], [2, 0.42, 0.62], [3, 0.2, 0.45], [4.01, 0.1, 0.32], [5.02, 0.05, 0.22]];
   for (const [mult, amp, dscale] of partials) {
     const o = actx.createOscillator();
-    o.type = 'sine';
-    o.frequency.value = f * mult;
+    o.type = 'sine'; o.frequency.value = f * mult;
     if (mult === 1) o.detune.value = Math.random() * 4 - 2;
-    const g = actx.createGain();
-    g.gain.setValueAtTime(amp, when);
-    g.gain.exponentialRampToValueAtTime(0.0001, when + ring * dscale);
-    o.connect(g); g.connect(out);
+    const gn = actx.createGain();
+    gn.gain.setValueAtTime(amp, when);
+    gn.gain.exponentialRampToValueAtTime(0.0001, when + ring * dscale);
+    o.connect(gn); gn.connect(out);
     o.start(when); o.stop(when + ring + 0.1);
     playSrc.push(o);
   }
 }
-/* Full pianist voicing: left hand root+fifth low, right hand rich triad. */
 function fullChord(c) {
-  const third = c.type === 'm' ? 3 : 4;
-  const bassRoot = 36 + c.root;          // C2–B2
-  const b = 60 + c.root;                 // C4–B4
-  return {
-    bass: [bassRoot, bassRoot + 7],
-    keys: [b, b + third, b + 7, b + 12],
-  };
+  const third = c.t === 'm' ? 3 : 4;
+  const bassRoot = 36 + c.r, b = 60 + c.r;
+  return { bass: [bassRoot, bassRoot + 7], keys: [b, b + third, b + 7, b + 12] };
 }
 function clearChordColors() {
   for (const m in pianoEl) pianoEl[m].classList.remove('cur', 'next');
 }
-function scheduleChordSound(c, when) {
+
+// ---------- play along ----------
+function scheduleChordSound(c, when, dur) {
   const v = fullChord(c);
-  for (const m of v.bass) pianoNote(m, when, c.dur, 0.12);
-  for (const m of v.keys) pianoNote(m, when, c.dur, 0.15);
+  for (const m of v.bass) pianoNote(m, when, dur, 0.12);
+  for (const m of v.keys) pianoNote(m, when, dur, 0.15);
 }
 function scheduleChordColors(idx, when, seq) {
   const delay = Math.max(0, (when - actx.currentTime) * 1000);
@@ -430,51 +346,61 @@ function scheduleChordColors(idx, when, seq) {
     const cur = seq[idx], nxt = seq[(idx + 1) % seq.length];
     for (const m of fullChord(cur).keys) { const el = pianoEl[m]; if (el) el.classList.add('cur'); }
     for (const m of fullChord(nxt).keys) { const el = pianoEl[m]; if (el && !el.classList.contains('cur')) el.classList.add('next'); }
-    $('#chord').textContent = EM.chordName(cur);
+    $('#chord').textContent = EarDSP.chordName(cur);
   }, delay));
 }
-
-// ---------- play along: you're the pianist ----------
 function startPlayAlong() {
-  if (!learned || !learned.chords.length) return;
   ensureCtx(); initPiano();
   stopPlayback();
+  let seq, songMode;
+  if (mode === 'sing') {
+    const backing = singBacking();
+    if (!backing.length) { setStatus('Sing a bit more first — I need your melody.'); return; }
+    seq = backing; songMode = false;
+  } else if (songBuffer) {
+    seq = chordTimeline.map(c => ({ r: c.r, t: c.t, dur: 2 })); // durations set below
+    for (let i = 0; i < seq.length; i++) {
+      const cur = chordTimeline[i], nxt = chordTimeline[i + 1];
+      seq[i].dur = nxt ? Math.min(8, Math.max(0.5, nxt.start - cur.start)) : 2;
+    }
+    songMode = true;
+  } else {
+    if (!learned) return;
+    seq = learned.chords; songMode = false;
+  }
+  if (!seq.length) return;
   playing = true;
   $('#bPlay').textContent = '⏹ Stop piano';
   $('#bPlay').onclick = stopPlayAlong;
   const t0 = actx.currentTime + 0.3;
-  if (songBuffer && mode === 'song' && chords.length >= 4) {
-    // Upload: the band plays the song, you play the chords as they come.
+  if (songMode) {
     songSource = actx.createBufferSource();
     songSource.buffer = songBuffer;
     songSource.connect(actx.destination);
     songSource.start(t0);
     setStatus('🎹 Playing along with the song — you\'re the pianist', true);
-    chords.forEach((c, i) => {
-      scheduleChordSound(c, t0 + c.start);
-      scheduleChordColors(i, t0 + c.start, chords);
+    seq.forEach((c, i) => {
+      scheduleChordSound(c, t0 + chordTimeline[i].start, c.dur);
+      scheduleChordColors(i, t0 + chordTimeline[i].start, seq);
     });
-    playTimers.push(setTimeout(() => { if (playing) stopPlayAlong(); },
-      (songBuffer.duration + 1.2) * 1000));
+    playTimers.push(setTimeout(() => { if (playing) stopPlayAlong(); }, (songBuffer.duration + 1.5) * 1000));
   } else {
-    // Live: vamp the learned 4-chord loop — you keep the groove.
-    setStatus('🎹 Playing along — you\'re the pianist, holding the groove', true);
-    playLoopIteration(t0);
+    setStatus('🎹 Playing along — holding the groove', true);
+    playLoopIteration(t0, seq);
   }
 }
-function playLoopIteration(t0) {
-  if (!playing || !learned) return;
-  const seq = learned.chords;
+function playLoopIteration(t0, seq) {
+  if (!playing) return;
   let t = t0;
   seq.forEach((c, i) => {
-    scheduleChordSound(c, t);
+    scheduleChordSound(c, t, c.dur);
     scheduleChordColors(i, t, seq);
     t += c.dur;
   });
   const loopDur = t - t0;
   playTimers.push(setTimeout(() => {
     if (!playing) return;
-    if (loopOn) playLoopIteration(actx.currentTime + 0.08);
+    if (loopOn) playLoopIteration(actx.currentTime + 0.08, seq);
     else stopPlayAlong();
   }, loopDur * 1000));
 }
@@ -484,7 +410,6 @@ function stopPlayAlong() {
   if (songSource) { try { songSource.stop(); } catch (e) {} songSource = null; }
   $('#bPlay').textContent = '🎹 Play along';
   $('#bPlay').onclick = startPlayAlong;
-  $('#chord').textContent = '–';
   setStatus('Stopped — the band takes five.');
 }
 function stopPlayback() {
@@ -499,20 +424,35 @@ function setStatus(t, pulse) {
   $('#status').textContent = t;
   $('#status').classList.toggle('pulse', !!pulse);
 }
+function updatePlan() {
+  if (!learned || !learned.key) { $('#plan').textContent = 'Nothing learned yet.'; return; }
+  const k = learned.key;
+  const tonic = k.m ? (k.k + 3) % 12 : k.k;
+  const deg = c => {
+    const d = (c.r - tonic + 12) % 12;
+    const map = k.m ? {0:'1',2:'2',3:'3',5:'4',7:'5',8:'6',10:'7'} : {0:'1',2:'2',4:'3',5:'4',7:'5',9:'6',11:'7'};
+    return map[d] || EarDSP.chordName(c);
+  };
+  const tp = learned.bpm ? '  ·  ' + learned.bpm + ' BPM' : '';
+  $('#plan').textContent = 'Your part: ' + learned.chords.map(EarDSP.chordName).join(' – ') +
+    '  ·  ' + learned.chords.map(deg).join(' – ') + '  ·  in ' + k.name + tp;
+}
 function reset() {
-  stopMic(); stopPlayAlong();
+  stopListening(); stopPlayAlong();
   playing = false;
   $('#bPlay').textContent = '🎹 Play along';
   $('#bPlay').onclick = startPlayAlong;
-  pcm = null; pcmLen = 0; baseSec = 0; workerBusy = false;
-  allNotes = []; seen = new Set(); chords = []; learned = null; keyInfo = null; tempoInfo = null;
+  ear = EarDSP.create();
+  chordTimeline = []; learned = null;
+  songBuffer = null;
   $('#key').textContent = '–'; $('#keysub').textContent = 'Listening…';
   $('#chord').textContent = '–'; $('#prog').textContent = '–'; $('#bpm').textContent = '';
   $('#learn').textContent = 'Waiting for music…'; $('#plan').textContent = 'Nothing learned yet.';
+  $('#sub').textContent = 'Listens to the sound itself — key, chords, loop and tempo, live.';
   $('#bPlay').disabled = true; $('#bLoop').disabled = true;
   loopOn = true; $('#bLoop').textContent = '🔁 Loop: on';
-  setStatus(modelReady ? 'Ready — tap Listen, Sing, or Upload' : 'Loading the neural net…');
-  if (modelReady) $('#sub').textContent = 'Background AI: hears the audio → writes down every note → votes on the key → groups notes into chords → feels the tempo.';
+  $('#loadbar').style.width = '0%';
+  setStatus('Ready — tap Listen, Sing, or Upload.');
 }
 
 // ---------- wire up ----------
@@ -520,14 +460,11 @@ $('#bListen').onclick = () => startMic(false);
 $('#bSing').onclick = () => startMic(true);
 $('#bUpload').onclick = () => $('#file').click();
 $('#file').onchange = (e) => uploadFile(e.target.files[0]);
-$('#bStop').onclick = () => { stopMic(); stopPlayAlong(); };
+$('#bStop').onclick = () => { stopListening(); stopPlayAlong(); if (chordTimeline.length && !learned) setStatus('Stopped. Heard ' + chordTimeline.length + ' chord changes.'); };
 $('#bPlay').onclick = startPlayAlong;
 $('#bLoop').onclick = () => { loopOn = !loopOn; $('#bLoop').textContent = '🔁 Loop: ' + (loopOn ? 'on' : 'off'); };
 $('#bReset').onclick = reset;
 
 buildPiano();
-setStatus('Loading the neural net…', true);
-$('#loadbar').style.width = '35%';
-bootWorker();
 </script>
 </body></html>
