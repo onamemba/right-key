@@ -36,11 +36,14 @@ button:disabled{opacity:.45;cursor:default;transform:none}
 .pulse{animation:pl 1.6s ease-in-out infinite}@keyframes pl{50%{opacity:.45}}
 @media(max-width:640px){main{grid-template-columns:1fr}}
 .piano{position:relative;display:flex;gap:4px;height:170px;margin-top:12px;padding:12px;border-radius:26px;background:var(--g);-webkit-backdrop-filter:blur(24px) saturate(180%);backdrop-filter:blur(24px) saturate(180%);border:1px solid var(--gb);box-shadow:0 8px 30px rgba(0,0,0,.08);touch-action:manipulation}
-.wk,.bk{border:0;padding:0;transition:background .15s}
+.wk,.bk{border:0;padding:0;transition:background .18s}
 .wk{flex:1;min-width:0;background:#fff;border-radius:0 0 14px 14px;box-shadow:0 1px 2px rgba(0,0,0,.06);display:flex;align-items:flex-end;justify-content:center;padding-bottom:10px;color:#8e8e93;font-size:.72rem;font-weight:600}
-.wk.on{background:#0a84ff;color:#fff}
 .bk{position:absolute;top:12px;height:96px;width:calc((100% - 24px)/14*.62);transform:translateX(-50%);background:#1c1c1e;border-radius:0 0 12px 12px;z-index:2}
-.bk.on{background:#0a84ff}
+.wk.cur,.bk.cur{background:#0a84ff;color:#fff}
+.wk.next,.bk.next{background:#ff3b30;color:#fff}
+.legend{display:flex;gap:16px;margin-top:10px;font-size:.85rem;color:var(--mut)}
+.dot{display:inline-block;width:10px;height:10px;border-radius:50%;margin-right:6px;vertical-align:baseline}
+.dot.b{background:#0a84ff}.dot.r{background:#ff3b30}
 </style></head><body><div class="atmos"><i></i><i></i></div><main>
 <header><h1>🎧 Play by Ear</h1><a href="index.html">← Right Key</a></header>
 
@@ -55,8 +58,8 @@ button:disabled{opacity:.45;cursor:default;transform:none}
     <button id="bUpload" disabled>📁 Upload audio</button>
     <input type="file" id="file" accept="audio/*" hidden>
     <button id="bStop" disabled>⏹ Stop</button>
-    <button id="bPlay" class="go" disabled>▶ Play it back</button>
-    <button id="bLoop" disabled>🔁 Loop: off</button>
+    <button id="bPlay" class="go" disabled>🎹 Play along</button>
+    <button id="bLoop" disabled>🔁 Loop: on</button>
     <button id="bReset" disabled>Reset</button>
   </div>
 </section>
@@ -72,12 +75,13 @@ button:disabled{opacity:.45;cursor:default;transform:none}
   <div class="num" id="chord">–</div>
   <div class="q" id="learn">Waiting for music…</div>
   <div class="nums" id="prog">–</div>
+  <div class="sub" id="bpm"></div>
 </section>
 
 <section class="card wide">
-  <div class="mut">Melody</div>
-  <div class="nums" id="melody">–</div>
+  <div class="mut">Piano — you're in the band</div>
   <div id="pi" class="piano"></div>
+  <div class="legend"><span><span class="dot b"></span>chord you're playing</span><span><span class="dot r"></span>next chord</span></div>
   <div class="sub" id="plan">Nothing learned yet.</div>
 </section>
 </main>
@@ -94,9 +98,10 @@ let pcm = null, pcmLen = 0, baseSec = 0;
 let workerBusy = false;
 let jobId = 0;
 let allNotes = [], seen = new Set();
-let chords = [], learned = null, keyInfo = null, mode = 'song';
-let loopOn = false, playTimers = [], playSrc = [];
-let lastMelodyMidi = -1;
+let chords = [], learned = null, keyInfo = null, tempoInfo = null, mode = 'song';
+let songBuffer = null, songSource = null;
+let playing = false, loopOn = true, playTimers = [], playSrc = [];
+let pianoBus = null;
 const pianoEl = {};
 
 // ---------- worker ----------
@@ -113,7 +118,7 @@ function onWorkerMsg(e) {
     setStatus(mode === 'sing'
       ? 'Ready — tap "Sing to me" and sing a tune'
       : 'Ready — tap "Listen to a song" and play music near the mic');
-    $('#sub').textContent = 'Background AI: hears the audio → writes down every note → votes on the key → groups notes into chords.';
+    $('#sub').textContent = 'Background AI: hears the audio → writes down every note → votes on the key → groups notes into chords → feels the tempo.';
     for (const id of ['bListen','bSing','bUpload','bReset']) $('#'+id).disabled = false;
     $('#loadbar').style.width = '100%';
   } else if (m.kind === 'notes') {
@@ -154,6 +159,7 @@ async function startMic(singMode) {
   if (!modelReady) return;
   reset();
   mode = singMode ? 'sing' : 'song';
+  songBuffer = null;
   ensureCtx();
   try {
     stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false } });
@@ -216,6 +222,7 @@ async function uploadFile(file) {
   try {
     const buf = await file.arrayBuffer();
     const ab = await actx.decodeAudioData(buf);
+    songBuffer = ab; // keep it — the band plays it back while you play piano
     let ch = ab.getChannelData(0);
     if (ab.numberOfChannels > 1) {
       const c1 = ab.getChannelData(1), mix = new Float32Array(ch.length);
@@ -243,10 +250,10 @@ function ingestNotes(notes) {
   if (added) analyze();
 }
 function pipelineLine() {
-  // What the AI is doing in the background, live.
   const bits = ['hearing audio', allNotes.length + ' notes written'];
   bits.push(keyInfo ? 'key found: ' + keyInfo.name : 'voting on the key…');
   bits.push(chords.length ? chords.length + ' chords grouped' : 'grouping chords…');
+  bits.push(tempoInfo ? 'feeling ' + tempoInfo.bpm + ' BPM' : 'feeling the tempo…');
   if (learned) bits.push('loop learned ✓');
   return 'AI · ' + bits.join(' → ');
 }
@@ -254,10 +261,12 @@ function analyze() {
   if (allNotes.length < 10) { setStatus('Listening… collecting notes (' + allNotes.length + '/10)', true); return; }
   keyInfo = EM.detectKey(allNotes);
   chords = EM.chordsOverTime(allNotes);
+  tempoInfo = EM.detectTempo(allNotes);
   const melody = EM.skyline(allNotes);
 
   const cur = chords[chords.length - 1];
   $('#chord').textContent = cur ? EM.chordName(cur) : '–';
+  $('#bpm').textContent = tempoInfo ? '♪ ' + tempoInfo.bpm + ' BPM' : '';
 
   if (keyInfo) {
     $('#key').textContent = keyInfo.name;
@@ -266,12 +275,6 @@ function analyze() {
     $('#key').textContent = '–';
     $('#keysub').textContent = 'Still listening — needs a few more notes…';
   }
-
-  // Flowing melody: the latest notes stream across, newest last.
-  const tail = melody.slice(-16);
-  $('#melody').textContent = tail.length ? tail.map(n => EM.midiToName(n.midi)).join(' ') : '–';
-  const top = tail[tail.length - 1];
-  if (top && top.midi !== lastMelodyMidi) { lastMelodyMidi = top.midi; flashPiano(top.midi, 900); }
 
   let shown = [];
   if (mode === 'sing') {
@@ -282,7 +285,6 @@ function analyze() {
       learned = {
         chords: backing.map(c => ({ ...c, start: c.start - t0m })),
         sig,
-        melody: melody.map(n => ({ ...n, start: n.start - t0m })),
       };
       onLearned('Found chords for your melody');
     }
@@ -293,10 +295,8 @@ function analyze() {
       const loop4 = loop.slice(0, 4);
       const sig = loop4.map(c => c.root + c.type).join('|');
       if (sig !== (learned && learned.sig)) {
-        const ls = loop4[0].start, le = loop4[loop4.length - 1].start + loop4[loop4.length - 1].dur;
-        const loopMelody = melody.filter(n => n.start >= ls - 0.1 && n.start < le + 0.3)
-          .map(n => ({ ...n, start: n.start - ls }));
-        learned = { chords: loop4.map(c => ({ ...c, start: c.start - ls })), sig, melody: loopMelody, loopDur: le - ls };
+        const ls = loop4[0].start;
+        learned = { chords: loop4.map(c => ({ ...c, start: c.start - ls })), sig, loopDur: loop4.reduce((a, c) => a + c.dur, 0) };
         onLearned('Heard the loop repeat — got it');
       }
     }
@@ -307,7 +307,7 @@ function analyze() {
   $('#learn').textContent = learnLine();
   updatePlan();
   $('#sub').textContent = pipelineLine();
-  if (allNotes.length) setStatus(learned ? 'Learned ✓ — tap "Play it back"' : 'Listening… ' + learnLine(), !learned);
+  if (allNotes.length) setStatus(learned ? 'Learned ✓ — tap "Play along" to join the band' : 'Listening… ' + learnLine(), !learned);
 }
 function learnLine() {
   if (learned) return mode === 'sing' ? 'Chords found for your melody ✓' : 'Loop learned ✓ (' + learned.chords.length + ' chords)';
@@ -323,10 +323,9 @@ function onLearned(msg) {
 function updatePlan() {
   if (!learned || !keyInfo) { $('#plan').textContent = 'Nothing learned yet.'; return; }
   const nums = learned.chords.map(c => numOf(c, keyInfo)).join(' – ');
-  $('#plan').textContent = (mode === 'sing' ? 'Your melody' : 'The melody') +
-    ' (' + learned.melody.length + ' notes) over ' +
-    learned.chords.map(EM.chordName).join(' – ') +
-    '  ·  ' + nums + '  ·  in ' + keyInfo.name;
+  $('#plan').textContent = learned.chords.map(EM.chordName).join(' – ') +
+    '  ·  ' + nums + '  ·  in ' + keyInfo.name +
+    (tempoInfo ? '  ·  ' + tempoInfo.bpm + ' BPM' : '');
 }
 function numOf(c, key) {
   const deg = (c.root - key.tonic + 12) % 12;
@@ -356,70 +355,143 @@ function buildPiano() {
     pi.appendChild(k); pianoEl[m] = k;
   });
 }
-function flashPiano(midi, ms) {
-  const el = pianoEl[midi];
-  if (!el) return;
-  el.classList.add('on');
-  setTimeout(() => el.classList.remove('on'), ms || 700);
+function initPiano() {
+  ensureCtx();
+  if (pianoBus) return;
+  const comp = actx.createDynamicsCompressor();
+  comp.threshold.value = -18; comp.ratio.value = 4;
+  const filter = actx.createBiquadFilter();
+  filter.type = 'lowpass'; filter.frequency.value = 5200; filter.Q.value = 0.4;
+  const conv = actx.createConvolver();
+  conv.buffer = makeImpulse(2.4, 2.6);
+  const wet = actx.createGain(); wet.gain.value = 0.32;
+  pianoBus = actx.createGain(); pianoBus.gain.value = 0.9;
+  pianoBus.connect(comp);
+  pianoBus.connect(conv); conv.connect(wet); wet.connect(comp);
+  comp.connect(filter); filter.connect(actx.destination);
 }
-function scheduleFlash(midi, whenSec, ms) {
-  const delay = Math.max(0, (whenSec - actx.currentTime) * 1000);
-  playTimers.push(setTimeout(() => flashPiano(midi, ms), delay));
+function makeImpulse(dur, decay) {
+  const rate = actx.sampleRate, len = Math.floor(rate * dur);
+  const buf = actx.createBuffer(2, len, rate);
+  for (let ch = 0; ch < 2; ch++) {
+    const d = buf.getChannelData(ch);
+    for (let i = 0; i < len; i++) d[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / len, decay);
+  }
+  return buf;
+}
+/* Grand-piano-ish voice: stacked harmonics with their own decays, gentle
+ * chorus on the fundamental, and the sustain pedal down — notes ring. */
+function pianoNote(midi, when, dur, vel) {
+  initPiano();
+  const f = EM.midiToFreq(midi);
+  const ring = Math.max(dur, 1.1) + 1.8; // sustain on: everything rings
+  const out = actx.createGain();
+  out.gain.setValueAtTime(0.0001, when);
+  out.gain.exponentialRampToValueAtTime(Math.max(vel, 0.001), when + 0.006);
+  out.gain.exponentialRampToValueAtTime(0.0001, when + ring);
+  out.connect(pianoBus);
+  const partials = [[1, 1.0, 1.0], [2, 0.42, 0.62], [3, 0.2, 0.45], [4.01, 0.1, 0.32], [5.02, 0.05, 0.22]];
+  for (const [mult, amp, dscale] of partials) {
+    const o = actx.createOscillator();
+    o.type = 'sine';
+    o.frequency.value = f * mult;
+    if (mult === 1) o.detune.value = Math.random() * 4 - 2;
+    const g = actx.createGain();
+    g.gain.setValueAtTime(amp, when);
+    g.gain.exponentialRampToValueAtTime(0.0001, when + ring * dscale);
+    o.connect(g); g.connect(out);
+    o.start(when); o.stop(when + ring + 0.1);
+    playSrc.push(o);
+  }
+}
+/* Full pianist voicing: left hand root+fifth low, right hand rich triad. */
+function fullChord(c) {
+  const third = c.type === 'm' ? 3 : 4;
+  const bassRoot = 36 + c.root;          // C2–B2
+  const b = 60 + c.root;                 // C4–B4
+  return {
+    bass: [bassRoot, bassRoot + 7],
+    keys: [b, b + third, b + 7, b + 12],
+  };
+}
+function clearChordColors() {
+  for (const m in pianoEl) pianoEl[m].classList.remove('cur', 'next');
+}
+function scheduleChordSound(c, when) {
+  const v = fullChord(c);
+  for (const m of v.bass) pianoNote(m, when, c.dur, 0.12);
+  for (const m of v.keys) pianoNote(m, when, c.dur, 0.15);
+}
+function scheduleChordColors(idx, when, seq) {
+  const delay = Math.max(0, (when - actx.currentTime) * 1000);
+  playTimers.push(setTimeout(() => {
+    if (!playing) return;
+    clearChordColors();
+    const cur = seq[idx], nxt = seq[(idx + 1) % seq.length];
+    for (const m of fullChord(cur).keys) { const el = pianoEl[m]; if (el) el.classList.add('cur'); }
+    for (const m of fullChord(nxt).keys) { const el = pianoEl[m]; if (el && !el.classList.contains('cur')) el.classList.add('next'); }
+    $('#chord').textContent = EM.chordName(cur);
+  }, delay));
 }
 
-// ---------- playback ----------
-function pianoNote(midi, when, dur, vel) {
-  const f = EM.midiToFreq(midi);
-  const g = actx.createGain();
-  const o1 = actx.createOscillator(), o2 = actx.createOscillator();
-  o1.type = 'triangle'; o1.frequency.value = f;
-  o2.type = 'sine'; o2.frequency.value = f * 2;
-  const g2 = actx.createGain(); g2.gain.value = 0.25;
-  o1.connect(g); o2.connect(g2); g2.connect(g); g.connect(actx.destination);
-  const peak = vel, dec = Math.max(dur, 1.6);
-  g.gain.setValueAtTime(0.0001, when);
-  g.gain.exponentialRampToValueAtTime(peak, when + 0.012);
-  g.gain.exponentialRampToValueAtTime(0.0001, when + dec);
-  o1.start(when); o2.start(when);
-  const stopAt = when + dec + 0.1;
-  o1.stop(stopAt); o2.stop(stopAt);
-  playSrc.push(o1, o2);
-}
-function triadMidi(c) {
-  const base = 48 + c.root;
-  const third = c.type === 'm' || c.type === 'dim' ? 3 : 4;
-  const fifth = c.type === 'dim' ? 6 : 7;
-  const notes = [base, base + third, base + fifth];
-  if (c.type === '7') notes.push(base + 10);
-  return notes;
-}
-function playBack() {
-  if (!learned) return;
-  ensureCtx();
+// ---------- play along: you're the pianist ----------
+function startPlayAlong() {
+  if (!learned || !learned.chords.length) return;
+  ensureCtx(); initPiano();
   stopPlayback();
-  const t0 = actx.currentTime + 0.15;
-  for (const c of learned.chords) {
-    for (const m of triadMidi(c)) {
-      pianoNote(m, t0 + c.start, Math.min(c.dur + 0.4, 3), 0.16);
-      scheduleFlash(m + 12, t0 + c.start, Math.min(c.dur, 2.5) * 1000);
-    }
+  playing = true;
+  $('#bPlay').textContent = '⏹ Stop piano';
+  $('#bPlay').onclick = stopPlayAlong;
+  const t0 = actx.currentTime + 0.3;
+  if (songBuffer && mode === 'song' && chords.length >= 4) {
+    // Upload: the band plays the song, you play the chords as they come.
+    songSource = actx.createBufferSource();
+    songSource.buffer = songBuffer;
+    songSource.connect(actx.destination);
+    songSource.start(t0);
+    setStatus('🎹 Playing along with the song — you\'re the pianist', true);
+    chords.forEach((c, i) => {
+      scheduleChordSound(c, t0 + c.start);
+      scheduleChordColors(i, t0 + c.start, chords);
+    });
+    playTimers.push(setTimeout(() => { if (playing) stopPlayAlong(); },
+      (songBuffer.duration + 1.2) * 1000));
+  } else {
+    // Live: vamp the learned 4-chord loop — you keep the groove.
+    setStatus('🎹 Playing along — you\'re the pianist, holding the groove', true);
+    playLoopIteration(t0);
   }
-  for (const n of learned.melody) {
-    pianoNote(n.midi, t0 + n.start, Math.min(n.dur + 0.25, 2.5), 0.5);
-    scheduleFlash(n.midi, t0 + n.start, Math.min(n.dur + 0.3, 1.5) * 1000);
-  }
-  const total = Math.max(
-    ...learned.chords.map(c => c.start + c.dur),
-    ...learned.melody.map(n => n.start + n.dur), 1);
-  setStatus('▶ Playing what it learned…', true);
-  if (loopOn) playTimers.push(setTimeout(playBack, (total + 0.6) * 1000));
-  else playTimers.push(setTimeout(() => setStatus('Done — tap "Play it back" to hear it again'), total * 1000 + 800));
+}
+function playLoopIteration(t0) {
+  if (!playing || !learned) return;
+  const seq = learned.chords;
+  let t = t0;
+  seq.forEach((c, i) => {
+    scheduleChordSound(c, t);
+    scheduleChordColors(i, t, seq);
+    t += c.dur;
+  });
+  const loopDur = t - t0;
+  playTimers.push(setTimeout(() => {
+    if (!playing) return;
+    if (loopOn) playLoopIteration(actx.currentTime + 0.08);
+    else stopPlayAlong();
+  }, loopDur * 1000));
+}
+function stopPlayAlong() {
+  playing = false;
+  stopPlayback();
+  if (songSource) { try { songSource.stop(); } catch (e) {} songSource = null; }
+  $('#bPlay').textContent = '🎹 Play along';
+  $('#bPlay').onclick = startPlayAlong;
+  $('#chord').textContent = '–';
+  setStatus('Stopped — the band takes five.');
 }
 function stopPlayback() {
   playTimers.forEach(clearTimeout); playTimers = [];
   playSrc.forEach(o => { try { o.stop(); } catch (e) {} });
   playSrc = [];
-  for (const m in pianoEl) pianoEl[m].classList.remove('on');
+  clearChordColors();
 }
 
 // ---------- misc ----------
@@ -428,17 +500,19 @@ function setStatus(t, pulse) {
   $('#status').classList.toggle('pulse', !!pulse);
 }
 function reset() {
-  stopMic(); stopPlayback();
+  stopMic(); stopPlayAlong();
+  playing = false;
+  $('#bPlay').textContent = '🎹 Play along';
+  $('#bPlay').onclick = startPlayAlong;
   pcm = null; pcmLen = 0; baseSec = 0; workerBusy = false;
-  allNotes = []; seen = new Set(); chords = []; learned = null; keyInfo = null;
-  lastMelodyMidi = -1;
+  allNotes = []; seen = new Set(); chords = []; learned = null; keyInfo = null; tempoInfo = null;
   $('#key').textContent = '–'; $('#keysub').textContent = 'Listening…';
-  $('#chord').textContent = '–'; $('#prog').textContent = '–'; $('#melody').textContent = '–';
+  $('#chord').textContent = '–'; $('#prog').textContent = '–'; $('#bpm').textContent = '';
   $('#learn').textContent = 'Waiting for music…'; $('#plan').textContent = 'Nothing learned yet.';
   $('#bPlay').disabled = true; $('#bLoop').disabled = true;
-  loopOn = false; $('#bLoop').textContent = '🔁 Loop: off';
+  loopOn = true; $('#bLoop').textContent = '🔁 Loop: on';
   setStatus(modelReady ? 'Ready — tap Listen, Sing, or Upload' : 'Loading the neural net…');
-  if (modelReady) $('#sub').textContent = 'Background AI: hears the audio → writes down every note → votes on the key → groups notes into chords.';
+  if (modelReady) $('#sub').textContent = 'Background AI: hears the audio → writes down every note → votes on the key → groups notes into chords → feels the tempo.';
 }
 
 // ---------- wire up ----------
@@ -446,8 +520,8 @@ $('#bListen').onclick = () => startMic(false);
 $('#bSing').onclick = () => startMic(true);
 $('#bUpload').onclick = () => $('#file').click();
 $('#file').onchange = (e) => uploadFile(e.target.files[0]);
-$('#bStop').onclick = () => { stopMic(); stopPlayback(); };
-$('#bPlay').onclick = playBack;
+$('#bStop').onclick = () => { stopMic(); stopPlayAlong(); };
+$('#bPlay').onclick = startPlayAlong;
 $('#bLoop').onclick = () => { loopOn = !loopOn; $('#bLoop').textContent = '🔁 Loop: ' + (loopOn ? 'on' : 'off'); };
 $('#bReset').onclick = reset;
 

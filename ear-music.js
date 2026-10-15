@@ -10,12 +10,10 @@ const NN = ['C','C#','D','Eb','E','F','F#','G','Ab','A','Bb','B'];
 const MAJ = [6.35,2.23,3.48,2.33,4.38,4.09,2.52,5.19,2.39,3.66,2.29,2.88];
 const MIN = [6.33,2.68,3.52,5.38,2.60,3.53,2.54,4.75,3.98,2.69,3.34,3.17];
 const DIA_MAJ = [0,2,4,5,7,9,11], DIA_MIN = [0,2,3,5,7,8,10];
-// Chord templates: pitch-class sets relative to root.
+// Chord templates: major and minor triads only (the pianist's vocabulary).
 const TEMPLATES = [
   { type: '',   pcs: [0, 4, 7] },
   { type: 'm',  pcs: [0, 3, 7] },
-  { type: 'dim',pcs: [0, 3, 6] },
-  { type: '7',  pcs: [0, 4, 7, 10] },
 ];
 
 const P = m => ((m % 12) + 12) % 12;
@@ -25,7 +23,7 @@ function midiToName(m) {
   return pcs[P(m)] + (Math.floor(m / 12) - 1);
 }
 function midiToFreq(m) { return 440 * Math.pow(2, (m - 69) / 12); }
-function chordName(c) { return NN[c.root] + (c.type === 'm' ? 'm' : c.type === 'dim' ? '°' : c.type === '7' ? '7' : ''); }
+function chordName(c) { return NN[c.root] + (c.type === 'm' ? 'm' : ''); }
 
 function pearson(a, b) {
   const n = a.length, ma = a.reduce((x, y) => x + y, 0) / n, mb = b.reduce((x, y) => x + y, 0) / n;
@@ -50,8 +48,6 @@ function scoreChord(pc, bass = -1) {
         const rel = (p - r + 12) % 12;
         s += t.pcs.includes(rel) ? pc[p] : -0.4 * pc[p];
       }
-      // Prefer simpler triads over 7ths unless clearly stronger.
-      if (t.type === '7') s *= 0.92;
       if (bass >= 0) {
         if (r === bass) s += 0.28 * total;            // root in the bass
         else if (r === (bass + 7) % 12) s += 0.10 * total; // fifth in the bass
@@ -180,11 +176,9 @@ function detectKey(notes) {
 
 /* Find a repeating chord loop in a chord sequence.
  * Returns the loop (array of chords) once the tail contains >= 2 full cycles,
- * else null. Compares root+type, but treats 7th chords as their base triad —
- * a melody note brushing the 7th shouldn't break an otherwise solid loop. */
+ * else null. Symbols compare root+type. */
 function detectLoop(chords, minCycles = 2) {
-  const norm = c => c.root + (c.type === '7' ? '' : c.type);
-  const syms = chords.map(norm);
+  const syms = chords.map(c => c.root + c.type);
   const n = syms.length;
   for (let p = 2; p <= 8 && p * minCycles <= n; p++) {
     let ok = true;
@@ -192,11 +186,38 @@ function detectLoop(chords, minCycles = 2) {
       if (syms[i] !== syms[i + p]) { ok = false; break; }
     }
     if (!ok) continue;
-    const loop = chords.slice(n - p).map(c => c.type === '7' ? { ...c, type: '' } : c);
-    if (new Set(loop.map(norm)).size < 2) continue; // need >= 2 distinct chords
+    const loop = chords.slice(n - p);
+    if (new Set(loop.map(c => c.root + c.type)).size < 2) continue; // need >= 2 distinct chords
     return loop;
   }
   return null;
+}
+
+/* Tempo (BPM) from note onsets: autocorrelate an onset pulse train and take
+ * the lag with the strongest repetition in a musical range (50–220 BPM).
+ * Returns { bpm } or null when there's too little to go on. */
+function detectTempo(notes) {
+  if (!notes || notes.length < 8) return null;
+  const onsets = notes.map(n => n.start);
+  const t0 = Math.min(...onsets), t1 = Math.max(...onsets);
+  const sr = 50, len = Math.ceil((t1 - t0) * sr); // 20ms bins
+  if (len < sr * 4) return null;
+  const pulse = new Float32Array(len);
+  for (const t of onsets) {
+    const i = Math.floor((t - t0) * sr);
+    if (i >= 0 && i < len) pulse[i] += 1;
+  }
+  let best = null;
+  for (let bpm = 50; bpm <= 220; bpm++) {
+    const lag = Math.round(60 / bpm * sr);
+    if (lag < 1 || lag >= len) continue;
+    let s = 0;
+    for (let i = 0; i + lag < len; i++) s += pulse[i] * pulse[i + lag];
+    s /= (len - lag);
+    if (bpm >= 80 && bpm <= 160) s *= 1.15; // tame octave errors toward common tempos
+    if (!best || s > best.s) best = { bpm, s };
+  }
+  return best ? { bpm: best.bpm } : null;
 }
 
 /* Melody = highest sounding note at any moment ("skyline" algorithm).
@@ -227,10 +248,10 @@ function skyline(notes) {
 function harmonize(melody, key, segSec = 1.6) {
   if (!melody.length || !key) return [];
   const t = key.tonic;
-  // Diatonic triads: [scale degree offset, type]
+  // Diatonic triads, major and minor only: [scale degree offset, type]
   const degrees = key.minor
-    ? [[0,'m'],[2,'dim'],[3,''],[5,'m'],[7,'m'],[8,''],[10,'']]
-    : [[0,''],[2,'m'],[4,'m'],[5,''],[7,''],[9,'m'],[11,'dim']];
+    ? [[0,'m'],[3,''],[5,'m'],[7,'m'],[8,''],[10,'']]
+    : [[0,''],[2,'m'],[4,'m'],[5,''],[7,''],[9,'m']];
   const cands = degrees.map(([off, ty]) => {
     const root = (t + off) % 12;
     const tmpl = TEMPLATES.find(x => x.type === ty);
@@ -271,7 +292,7 @@ function harmonize(melody, key, segSec = 1.6) {
   return out;
 }
 
-const EarMusic = { NN, midiToName, midiToFreq, chordName, scoreChord, chordsOverTime, detectKey, detectLoop, skyline, harmonize };
+const EarMusic = { NN, midiToName, midiToFreq, chordName, scoreChord, chordsOverTime, detectKey, detectLoop, detectTempo, skyline, harmonize };
 if (typeof module !== 'undefined' && module.exports) module.exports = EarMusic;
 g.EarMusic = EarMusic;
 })(typeof window !== 'undefined' ? window : globalThis);
