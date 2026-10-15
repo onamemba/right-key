@@ -4,12 +4,12 @@
 <meta name="mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-capable" content="yes">
 <title>Right Key</title>
 <style>
-:root{--bg:#f2f2f7;--ink:#000;--mut:#6c6c70;--g:rgba(255,255,255,.62);--gb:rgba(255,255,255,.8);--ln:rgba(0,0,0,.08);--b1:#d9dde8;--b2:#eadfe4;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
-@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#000;--ink:#fff;--mut:#98989f;--g:rgba(44,44,46,.55);--gb:rgba(255,255,255,.14);--ln:rgba(255,255,255,.1);--b1:#2a2a30;--b2:#1c1c22}}
-:root[data-theme="dark"]{--bg:#000;--ink:#fff;--mut:#98989f;--g:rgba(44,44,46,.55);--gb:rgba(255,255,255,.14);--ln:rgba(255,255,255,.1);--b1:#2a2a30;--b2:#1c1c22}
+:root{--bg:#f2f2f7;--ink:#000;--mut:#6c6c70;--g:rgba(255,255,255,.62);--gb:rgba(255,255,255,.8);--ln:rgba(0,0,0,.08);--bg:#f5f3f5;--c1:#f6cfa8;--c2:#f4c3d6;--c3:#d8cdf5;--c4:#f7efb8;--c5:#cfe3f6;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#000;--ink:#fff;--mut:#98989f;--g:rgba(44,44,46,.55);--gb:rgba(255,255,255,.14);--ln:rgba(255,255,255,.1);--c1:#5a3b2a;--c2:#5a2b44;--c3:#34285c;--c4:#4f4a22;--c5:#1f3a55}}
+:root[data-theme="dark"]{--bg:#000;--ink:#fff;--mut:#98989f;--g:rgba(44,44,46,.55);--gb:rgba(255,255,255,.14);--ln:rgba(255,255,255,.1);--c1:#5a3b2a;--c2:#5a2b44;--c3:#34285c;--c4:#4f4a22;--c5:#1f3a55}
 *{box-sizing:inherit;-webkit-tap-highlight-color:transparent}
-body{margin:0;min-height:100vh;color:var(--ink);font:17px/1.35 -apple-system,BlinkMacSystemFont,"SF Pro Display","Helvetica Neue",Arial,sans-serif;background:radial-gradient(60% 40% at 15% 0%,var(--b1),transparent),radial-gradient(50% 40% at 90% 30%,var(--b2),transparent),var(--bg);background-attachment:fixed}
-main{max-width:860px;margin:0 auto;padding:18px 16px 40px;display:grid;gap:14px;grid-template-columns:1fr 1fr}
+body{margin:0;min-height:100vh;color:var(--ink);font:17px/1.35 -apple-system,BlinkMacSystemFont,"SF Pro Display","Helvetica Neue",Arial,sans-serif;background:var(--bg)}
+main{position:relative;z-index:1;max-width:860px;margin:0 auto;padding:18px 16px 40px;display:grid;gap:14px;grid-template-columns:1fr 1fr}
 header{grid-column:1/-1;display:flex;justify-content:space-between;align-items:center}
 h1{font-size:1.9rem;letter-spacing:-.02em;margin:0}
 .card{background:var(--g);-webkit-backdrop-filter:blur(28px) saturate(180%);backdrop-filter:blur(28px) saturate(180%);border:1px solid var(--gb);border-radius:26px;padding:20px;box-shadow:0 8px 30px rgba(0,0,0,.08),inset 0 1px 0 var(--gb);transition:transform .25s,box-shadow .25s}
@@ -35,14 +35,24 @@ button.go,button.on{background:var(--ink);color:var(--bg);border-color:var(--ink
 .two{display:flex;gap:28px;margin-top:10px}.two b{font-size:1.5rem}
 @media(max-width:640px){main{grid-template-columns:1fr}}
 .chip{font:inherit;color:var(--ink);cursor:pointer}
-.piano{position:relative;display:flex;height:150px;margin-top:10px;border-radius:14px;overflow:hidden;box-shadow:0 6px 20px rgba(0,0,0,.18);touch-action:manipulation}
-.wk,.bk{-webkit-backdrop-filter:none;backdrop-filter:none;border:0;padding:0;cursor:pointer;transition:background .1s}
-.wk{flex:1;background:#fff;border-right:1px solid #d1d1d6;border-radius:0 0 8px 8px;color:#8e8e93;font-size:.7rem;font-weight:500;display:flex;align-items:flex-end;justify-content:center;padding-bottom:8px}
-.wk:hover,.wk:active{background:#f2f2f7;transform:none}.wk.on{background:#0a84ff;color:#fff}.wk.hit{background:#d1d1d6}
-.bk{position:absolute;top:0;height:60%;width:calc(100%/14*.6);transform:translateX(-50%);background:#1c1c1e;border-radius:0 0 6px 6px;z-index:2}
-.bk:hover,.bk:active{background:#3a3a3c;transform:translateX(-50%)}.bk.on{background:#0a84ff}.bk.hit{background:#48484a}
-</style></head><body><main>
-<header><h1>Right Key</h1><span><a href="ear.html" style="color:var(--mut);text-decoration:none;font-weight:600;font-size:.95rem;margin-right:14px">🎧 Play by Ear</a><span class="badge" id="msg">Hold the phone near the band</span></span></header>
+.atmos{position:fixed;inset:0;z-index:0;overflow:hidden;pointer-events:none}
+.atmos i{position:absolute;inset:-35%;filter:blur(48px);will-change:transform}
+.atmos i:nth-child(1){background:radial-gradient(40% 35% at 25% 30%,var(--c1),transparent 70%),radial-gradient(35% 30% at 75% 25%,var(--c2),transparent 70%),radial-gradient(40% 35% at 70% 75%,var(--c3),transparent 70%);animation:spin 90s linear infinite}
+.atmos i:nth-child(2){background:radial-gradient(35% 30% at 30% 75%,var(--c4),transparent 70%),radial-gradient(30% 28% at 80% 55%,var(--c5),transparent 70%);animation:spin 140s linear infinite reverse}
+@keyframes spin{to{transform:rotate(360deg)}}
+@media (prefers-reduced-motion:reduce){.atmos i{animation:none}}
+.piano{position:relative;display:flex;gap:4px;height:190px;margin-top:12px;padding:12px;border-radius:26px;background:var(--g);-webkit-backdrop-filter:blur(24px) saturate(180%);backdrop-filter:blur(24px) saturate(180%);border:1px solid var(--gb);box-shadow:0 8px 30px rgba(0,0,0,.08);touch-action:manipulation}
+.wk,.bk{-webkit-backdrop-filter:none;backdrop-filter:none;border:0;cursor:pointer;font:inherit;transition:background .15s,transform .1s}
+.wk{flex:1;min-width:0;background:#fff;color:#6e6e73;border-radius:0 0 14px 14px;padding:0 0 12px;box-shadow:0 1px 2px rgba(0,0,0,.06);display:flex;flex-direction:column;align-items:center;justify-content:flex-end;font-size:clamp(.8rem,3.6vw,1.5rem);font-weight:800}
+.wk small{font-size:.5em;font-weight:600;opacity:.65}
+.wk:hover{background:#f7f7fa;transform:none}.wk:active{transform:scale(.98)}
+.bk{position:absolute;top:12px;height:106px;width:calc((100% - 24px)/8*.6);transform:translateX(-50%);background:#1c1c1e;border-radius:0 0 12px 12px;z-index:2;padding:0}
+.bk:hover,.bk:active{background:#3a3a3c;transform:translateX(-50%)}
+.wk.hit{background:#e5e5ea}.bk.hit{background:#48484a}
+.wk.tone{background:#f7e0a9}.wk.root{background:#93d89b}.bk.tone{background:#c79b3f}.bk.root{background:#4fae62}
+</style></head><body><div class="atmos"><i></i><i></i></div>
+<main>
+<header><h1>Right Key</h1><span class="badge" id="msg">Hold the phone near the band</span></header>
 <section class="card"><div class="mut">Root note</div><div class="root" id="root">–</div><div class="q" id="qual">Listening for the key</div><div class="sub" id="kc"></div>
 <div class="btns"><button id="st" class="go">Start</button><button id="pr">Play root</button><button id="lk">Lock key</button><select id="sk" aria-label="Set key"><option value="">Set key</option></select><button id="rs">Reset</button></div></section>
 <section class="card"><div class="mut">Chord now</div><div class="num" id="num">–</div><div class="q" id="nm"></div><div class="bar"><i id="cf"></i></div>
@@ -54,10 +64,7 @@ button.go,button.on{background:var(--ink);color:var(--bg);border-color:var(--ink
 const $=s=>document.querySelector(s);
 const NN=['C','C#','D','Eb','E','F','F#','G','Ab','A','Bb','B'],LAB=['1','♭2','2','♭3','3','4','♯4','5','♭6','6','♭7','7'];
 const MAJ=[6.35,2.23,3.48,2.33,4.38,4.09,2.52,5.19,2.39,3.66,2.29,2.88],MIN=[6.33,2.68,3.52,5.38,2.6,3.53,2.54,4.75,3.98,2.69,3.34,3.17];
-// Chord templates: reward chord tones, penalize the "wrong third" (-.35) and other
-// non-chord tones (-.1). This is what separates major from minor on a real piano,
-// where the root's own harmonics leak energy onto the major third.
-const TY=[{n:'',s:[0,4,7],w:{0:1,4:1,7:.9,3:-.35},o:-.1},{n:'m',s:[0,3,7],w:{0:1,3:1,7:.9,4:-.35},o:-.1}].map(t=>{const v=Array(12).fill(t.o);for(const k in t.w)v[k]=t.w[k];const m=Math.hypot(...v);t.v=v.map(x=>x/m);return t});
+const TY=[{n:'',s:[0,4,7]},{n:'m',s:[0,3,7]}].map(t=>{const v=Array(12).fill(0);t.s.forEach((i,j)=>v[i]=j?.9:1.2);const m=Math.hypot(...v);t.v=v.map(x=>x/m);return t});
 const DIA={0:['','7'],2:['m'],4:['m'],5:['','7'],7:['','7'],9:['m']}; // chords that fit a major key, offset from tonic
 let paused=false,playing=null,outG=null,seqA=[],lps=null,mute=0,ctx,an,fb,tb,sus,stream,wl,run=false,L=Array(12).fill(0),loud=0,key=null,locked=false,cur=null,cand='',stab=0,prog=[];
 const base=()=>key?(key.m?(key.k+3)%12:key.k):null;
@@ -78,7 +85,7 @@ function findKey(){const tw=src().reduce((a,p)=>a+1+Math.min(p.n||0,300)/60,0)||
  mSc=mSc*.8+.2*(.4*mw/tw+1.2*(bh[(t.R+9)%12]-bh[t.R])/bsum);minorF=minorF?mSc>.25:mSc>.55;const minor=minorF;
  return{k:minor?(t.R+9)%12:t.R,m:minor?1:0,gap:t.s-sc[1].s,early:!lps&&(src().length<3||loud<240)}}
 function setKey(){key=findKey();showKey(key.k,key.m);$('#kc').textContent=(key.early?'Early guess · ':key.gap>.1?'Confident · ':'Still learning · ')+(key.m?'1 = '+NN[base()]:'tap Set key if wrong')}
-function score(c,r,t,bass){let d=0;for(let i=0;i<12;i++)d+=c[(i+r)%12]*t.v[i];d/=Math.hypot(...c)||1;if(r===bass)d+=.03;const b=base();if(b!==null){const ok=(DIA[(r-b+12)%12]||[]).includes(t.n);d+=ok?.05:-.03}return d}
+function score(c,r,t,bass){let d=0;for(let i=0;i<12;i++)d+=c[(i+r)%12]*t.v[i];d/=Math.hypot(...c)||1;if(r===bass)d+=.07;const b=base();if(b!==null){const ok=(DIA[(r-b+12)%12]||[]).includes(t.n);d+=ok?.05:-.03}return d}
 function acf(buf,sr){const n=2048;let e=0;for(let i=0;i<n;i++)e+=buf[i]*buf[i];if(Math.sqrt(e/n)<.01)return -1;const lo=Math.floor(sr/1000),hi=Math.floor(sr/70),r=new Float32Array(hi+2);let mx=0;for(let l=lo;l<=hi;l++){let s=0;for(let i=0;i<n;i++)s+=buf[i]*buf[i+l];r[l]=s/e;if(r[l]>mx)mx=r[l]}if(mx<.5)return -1;for(let l=lo+1;l<hi;l++)if(r[l]>.9*mx&&r[l]>=r[l-1]&&r[l]>=r[l+1])return sr/l;return -1}
 
 $('#st').onclick=async()=>{if(run){run=false;stream.getTracks().forEach(t=>t.stop());wl&&wl.release();$('#st').textContent='Start';return}
@@ -98,7 +105,7 @@ function loop(){if(!run)return;requestAnimationFrame(loop);if(performance.now()<
  const c=Array(12).fill(0),bc=Array(12).fill(0);let pk=-200,tot=0,bt=0;
  for(let i=lo;i<=hi;i++){const db=fb[i];if(db>pk)pk=db;const m=db<-90?0:Math.sqrt(Math.pow(10,db/20));
   sus[i]=sus[i]*.9+m*.1;const h=Math.min(m,2.5*sus[i]); // keep sustained notes, drop drum hits
-  const mi=69+12*Math.log2(i*hz/440),r=Math.round(mi);if(Math.abs(mi-r)>.35||h<=0)continue;const p=((r%12)+12)%12,wq=Math.sqrt(130.81/(i*hz));c[p]+=h*wq;tot+=h*wq;if(i<=bh){bc[p]+=h*wq;bt+=h*wq}} // 1/sqrt(f): fundamentals outvote piano harmonics
+  const mi=69+12*Math.log2(i*hz/440),r=Math.round(mi);if(Math.abs(mi-r)>.35||h<=0)continue;const p=((r%12)+12)%12;c[p]+=h;tot+=h;if(i<=bh){bc[p]+=h;bt+=h}}
  if(pk<-65||tot<=0){stab=0;cand='';return}
  for(let k=0;k<12;k++){c[k]/=tot;L[k]=L[k]*.995+c[k]}loud++;if(cur)cur.n=(cur.n||0)+1;for(let k=0;k<12;k++)bh[k]*=.999;
  let bass=-1;if(bt>0){const mx=Math.max(...bc);if(mx/bt>.35)bass=bc.indexOf(mx)}if(bass>=0)bh[bass]+=1;$('#bs').textContent=bass>=0?NN[bass]:'–';
@@ -122,9 +129,9 @@ const mf=m=>440*2**((m-69)/12);
 function tone(f,t0,d,v){const o=ctx.createOscillator(),g=ctx.createGain();o.type='triangle';o.frequency.value=f;g.gain.setValueAtTime(0,t0);g.gain.linearRampToValueAtTime(v,t0+.03);g.gain.exponentialRampToValueAtTime(.001,t0+d);o.connect(g);g.connect(outG||ctx.destination);o.start(t0);o.stop(t0+d+.05)}
 async function ready(){ctx=ctx||new (window.AudioContext||window.webkitAudioContext)();await ctx.resume();return ctx.currentTime+.05}
 $('#pr').onclick=async()=>{if(!key)return;const t=await ready();tone(mf(48+key.k),t,1.8,.25);tone(mf(36+key.k),t,1.8,.25);mute=performance.now()+2300};
-const WH=[0,2,4,5,7,9,11],NIV=c=>TY.find(x=>x.n==c.t).s.map(i=>48+c.r+i);
-function buildPiano(){let w='',b='',wi=0;for(let m=48;m<72;m++){const pc=m%12;if(WH.includes(pc)){w+=`<button class="wk" data-m="${m}" aria-label="${NN[pc]}">${NN[pc]}</button>`;wi++}else b+=`<button class="bk" data-m="${m}" aria-label="${NN[pc]}" style="left:calc(${wi}*100%/14)"></button>`}$('#pi').innerHTML=w+b}
-function showChord(c,tag){document.querySelectorAll('#pi button').forEach(b=>b.classList.remove('on'));if(!c){$('#pn').textContent='Tap a chord above or press the keys';return}const ms=NIV(c);ms.forEach(m=>{const b=document.querySelector(`#pi [data-m="${m}"]`);if(b)b.classList.add('on')});$('#pn').textContent=(tag||'')+NN[c.r]+c.t+'  ·  '+ms.map(m=>NN[m%12]).join(' · ')}
+const NIV=c=>TY.find(x=>x.n==c.t).s.map(i=>48+c.r+i),WS=[0,2,4,5,7,9,11,12],SOL=['Do','Re','Mi','Fa','Sol','La','Ti','Do'],BS=[[1,1],[3,2],[6,4],[8,5],[10,6]];
+function buildPiano(){$('#pi').innerHTML=WS.map((m,i)=>`<button class="wk" data-pc="${m%12}" data-m="${60+m}" aria-label="${NN[m%12]}">${SOL[i]}<small>${NN[m%12]}</small></button>`).join('')+BS.map(([m,wi])=>`<button class="bk" data-pc="${m}" data-m="${60+m}" aria-label="${NN[m]}" style="left:calc(10px + ${wi}*(100% - 20px)/8)"></button>`).join('')}
+function showChord(c,tag){document.querySelectorAll('#pi button').forEach(b=>b.classList.remove('root','tone'));if(!c){$('#pn').textContent='Tap a chord above or press the keys';return}const ms=NIV(c);ms.forEach((m,i)=>document.querySelectorAll(`#pi [data-pc="${m%12}"]`).forEach(b=>b.classList.add(i?'tone':'root')));$('#pn').textContent=(tag||'')+NN[c.r]+c.t+'  ·  '+ms.map(m=>NN[m%12]).join(' · ')+'   (green = root, yellow = chord notes)'}
 const sound=(c,t0,d)=>{NIV(c).forEach(m=>tone(mf(m),t0,d,.1));tone(mf(36+c.r),t0,d,.22)};
 $('#pg').onclick=async e=>{const b=e.target.closest('.chip');if(!b)return;const c=curList[+b.dataset.i];if(!c)return;const t=await ready();sound(c,t,1.4);showChord(c,'Chord ');hold=performance.now()+2500;mute=performance.now()+1600};
 function durOf(a){const k=a.dur?a.dur.slice():a.map((c,i)=>i<a.length-1&&c.at&&a[i+1].at?a[i+1].at-c.at:null),ok=k.filter(x=>x>0),avg=ok.length?ok.reduce((x,y)=>x+y)/ok.length:1800;return k.map(x=>Math.min(8000,Math.max(300,x>0?x:avg)))}
