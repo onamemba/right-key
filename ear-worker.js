@@ -79,6 +79,7 @@ onmessage = async (e) => {
       return;
     }
   } catch (err) {
-    postMessage({ kind: 'error', id: msg.id, message: String((err && err.message) || err) });
+    const stack = err && err.stack ? String(err.stack).split('\n').slice(0, 8).join(' | ') : '';
+    postMessage({ kind: 'error', id: msg.id, message: String((err && err.message) || err) + (stack ? ' :: STACK :: ' + stack : '') });
   }
 };
