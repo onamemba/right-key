@@ -54,7 +54,7 @@ button.go,button.on{background:var(--ink);color:var(--bg);border-color:var(--ink
 </style></head><body><div class="atmos"><i></i><i></i></div>
 <main>
 <header><h1>Right Key</h1><span class="badge" id="bpm" hidden></span><span class="badge" id="ai" hidden></span><span class="badge" id="msg">Hold the phone near the band</span></header>
-<div class="wide seg"><button id="m1" class="on">Band</button><button id="m2">Vocal</button><button id="srcb">Chords: AI</button><span class="sub" id="hint">Hold the phone near the band.</span></div>
+<div class="wide seg"><button id="m1" class="on">Band</button><button id="m2">Vocal</button><button id="e1" class="on">AI model</button><button id="e2">Classic</button><span class="sub" id="hint">Hold the phone near the band.</span></div>
 <section class="card"><div class="mut">Root note</div><div class="root" id="root">–</div><div class="q" id="qual">Listening for the key</div><div class="sub" id="kc"></div>
 <div class="btns"><button id="st" class="go">Start</button><button id="pr">Play root</button><button id="lk">Lock key</button><select id="sk" aria-label="Set key"><option value="">Set key</option></select><button id="rs">Reset</button></div></section>
 <section class="card"><div class="mut">Chord now</div><div class="num" id="num">–</div><div class="q" id="nm"></div><div class="bar"><i id="cf"></i></div>
@@ -97,7 +97,7 @@ $('#st').onclick=async()=>{if(run){run=false;window.RKAI&&RKAI.stop();modelOn=fa
  try{stream=await navigator.mediaDevices.getUserMedia({audio:{echoCancellation:false,noiseSuppression:false,autoGainControl:false}})}catch(e){$('#msg').textContent='Microphone blocked. Allow it in browser settings.';return}
  try{wl=await navigator.wakeLock.request('screen')}catch(e){}
  an=ctx.createAnalyser();an.fftSize=16384;an.smoothingTimeConstant=0;ctx.createMediaStreamSource(stream).connect(an);
- fb=new Float32Array(an.frequencyBinCount);tb=new Float32Array(an.fftSize);sus=new Float32Array(an.frequencyBinCount);run=true;if(window.RKAI)RKAI.start({ctx,stream,mode,onChords:aiChords,onBpm:aiBpm,onStatus:aiStatus,onPitch:vocalPitch});if(mode==='vocal')startVocal();$('#st').textContent='Stop';$('#msg').textContent='Listening…';loop()};
+ fb=new Float32Array(an.frequencyBinCount);tb=new Float32Array(an.fftSize);sus=new Float32Array(an.frequencyBinCount);run=true;if(useAI)startAI();if(mode==='vocal')startVocal();$('#st').textContent='Stop';$('#msg').textContent='Listening…';loop()};
 $('#sk').innerHTML+=NN.map((n,i)=>`<option value="${i}:0">${n} major</option><option value="${i}:1">${n} minor</option>`).join('');
 $('#sk').onchange=e=>{if(!e.target.value)return;const[k,m]=e.target.value.split(':').map(Number);key={k,m,gap:1,early:false};locked=true;$('#lk').classList.add('on');showKey(k,m);$('#kc').textContent='Set by you'+(m?' · 1 = '+NN[base()]:'');draw()};
 $('#lk').onclick=()=>{locked=!locked;$('#lk').classList.toggle('on',locked)};
@@ -165,9 +165,13 @@ function commitChord(r,tn,at,ev){const id=r+':'+tn;if(cur&&cur.id===id)return;cu
 function startVocal(){harm=new RKVocal.Harmonizer({onKey:(k,m)=>{key={k,m,gap:1,early:false};showKey(k,m);$('#kc').textContent='From your singing'},onChord:c=>{commitChord(c.r,c.t,performance.now());pianoPlay(c)},onStrike:c=>pianoPlay(c)});hold=Infinity}
 function pianoPlay(c){if(!ctx)return;ready().then(t=>showChord(c,'Piano · ',sound(c,t,2.6)))}
 function vocalPitch(t,m,cf){if(mode!=='vocal'||!harm)return;harm.push(t,m,cf);if(m!=null&&cf>=.5){const n=Math.round(m);$('#nt').textContent=NN[((n%12)+12)%12]+(Math.floor(n/12)-1);$('#cn').textContent=((m-n)*100>=0?'+':'')+((m-n)*100).toFixed(0)+'¢'}}
-function setMode(m){if(run)$('#st').onclick();mode=m;$('#m1').classList.toggle('on',m==='band');$('#m2').classList.toggle('on',m==='vocal');$('#srcb').hidden=m==='vocal';$('#hint').textContent=m==='vocal'?'Sing or hum. Wear headphones so the microphone hears only your voice. The piano plays under you.':'Hold the phone near the band.';$('#rs').onclick()}
+function setMode(m){if(run)$('#st').onclick();mode=m;$('#m1').classList.toggle('on',m==='band');$('#m2').classList.toggle('on',m==='vocal');$('#hint').textContent=m==='vocal'?'Sing or hum. Wear headphones so the microphone hears only your voice. The piano plays under you. AI model = CREPE voice model, Classic = the earlier pitch tracker.':'Hold the phone near the band.';$('#rs').onclick()}
 $('#m1').onclick=()=>setMode('band');$('#m2').onclick=()=>setMode('vocal');
-$('#srcb').onclick=()=>{useAI=!useAI;$('#srcb').textContent='Chords: '+(useAI?'AI':'Fast')};
+function startAI(){if(window.RKAI&&run)RKAI.start({ctx,stream,mode,onChords:aiChords,onBpm:aiBpm,onStatus:aiStatus,onPitch:vocalPitch})}
+function setEngine(ai){useAI=ai;$('#e1').classList.toggle('on',ai);$('#e2').classList.toggle('on',!ai);try{localStorage.setItem('rk-engine',ai?'ai':'classic')}catch(e){}
+ if(run){if(ai)startAI();else{window.RKAI&&RKAI.stop();modelOn=false;modelMic=false;crepeOK=false;$('#ai').hidden=true;$('#bpm').hidden=true;bpm=0}}}
+$('#e1').onclick=()=>setEngine(true);$('#e2').onclick=()=>setEngine(false);
+try{if(localStorage.getItem('rk-engine')==='classic'){useAI=false;$('#e1').classList.remove('on');$('#e2').classList.add('on')}}catch(e){}
 let bpm=0,lagB={now:0,perf:0},runK=null,lastK=null;
 function feed(c,atMs){const k=c?c[0]+':'+c[1]:null;if(runK&&runK.k===k)runK.n++;else runK={k,n:1,at:atMs};
  if(c&&!modelMic){[0,c[1]=='m'?3:4,7].forEach((x,j)=>L[(c[0]+x)%12]+=j?.7:1);bh[c[0]]+=1}
@@ -175,7 +179,7 @@ function feed(c,atMs){const k=c?c[0]+':'+c[1]:null;if(runK&&runK.k===k)runK.n++;
 let modelOn=false,modelMic=false;
 function aiChords(m){modelOn=true;if(!useAI)return;modelMic=true;lagB={now:m.now,perf:performance.now()};m.chords.forEach((c,i)=>feed(c,(Math.round(m.t0/m.hop)+i)*m.hop*1000))}
 function aiBpm(b){bpm=b;$('#bpm').hidden=!b;$('#bpm').textContent='♩ '+Math.round(b)+' BPM'}
-function aiStatus(t){$('#ai').hidden=false;$('#ai').textContent=t;if(/voice model ready/i.test(t))crepeOK=true;if(/Voice model unavailable/i.test(t))crepeOK=false}
+function aiStatus(t){$('#ai').hidden=false;$('#ai').textContent=t.length>90?t.slice(0,90)+'…':t;if(/voice model ready/i.test(t))crepeOK=true;if(/Voice model unavailable/i.test(t))crepeOK=false}
 function connectBrain(){if(typeof location==='undefined'||location.protocol!=='http:'||!location.host)return;const ws=new WebSocket('ws://'+location.host+'/ws');
  ws.onopen=()=>{run=true;loud=999;$('#st').hidden=true;$('#msg').textContent='Model connected'};
  ws.onclose=()=>{run=false;$('#st').hidden=false;$('#msg').textContent='Model disconnected'};
