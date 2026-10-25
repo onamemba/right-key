@@ -118,7 +118,7 @@
     for (let i = 0; i < x.length; i++) { const v = x[i] * gain; this.buf[(this.total + i) % this.cap] = v; this.onsets(v); }
     if (this.o.onRaw) this.o.onRaw(x); this.total += x.length; if (!this.noChords) this.frames();
     if (!this.noChords && this.total - this.lastTempo >= 2 * SR && this.env.length > 200) { this.lastTempo = this.total; const t = tempo(this.env.slice(-344)); if (t && t.conf > .15 && this.o.onBpm) this.o.onBpm(t.bpm, t.conf); }
-    if (this.model && !this.busy && this.total - this.lastInfer >= SR && this.rows.length >= 60) { this.lastInfer = this.total; this.infer(); }
+    if (this.model && !this.busy && this.total - this.lastInfer >= Math.max(SR, (this.cost || 0) / 1000 * SR * 1.5) && this.rows.length >= 60) { this.lastInfer = this.total; this.infer(); }
   };
   Engine.prototype.onsets = function (v) {                    // two bands: loudness and brightness, hop 512
     this.pa += v * v; const d = v - this.prevDiff; this.prevDiff = v; this.ph += d * d;
@@ -135,16 +135,29 @@
     }
   };
   Engine.prototype.infer = async function () {
-    this.busy = true;
+    this.busy = true; const t0 = Date.now();
     try {
       const rows = this.rows.slice(-WIN), T = rows.length, X = new Float32Array(WIN * NB).fill(Math.log(1e-6));
       rows.forEach((r, j) => X.set(r.f, j * NB));
       const lg = await this.model(X), C = lg.length / WIN, ids = smoothArgmax(lg, T, C), limit = T - 1 - this.lagFrames, out = [];
       for (let j = 0; j <= limit; j++) if (rows[j].idx > this.done) out.push([rows[j].idx, parseLabel(this.labels[ids[j]])]);
+      this.cost = Date.now() - t0; if (!this.shown) { this.shown = true; this.o.onStatus && this.o.onStatus('AI chords running · ' + this.cost + ' ms per update'); }
       if (out.length) { this.done = out[out.length - 1][0]; this.o.onChords({ t0: out[0][0] * FR, hop: FR, now: this.total / SR * 1000, chords: out.map(o => o[1]) }); }
     } catch (e) { this.o.onStatus && this.o.onStatus('AI error: ' + e.message); }
     this.busy = false;
   };
+
+  /* the exported model takes a fixed batch of windows (16); fill the spare slots with silence and keep the first result */
+  function makeRunner(sess, Tensor, B0) {
+    let B = B0 || 16; const inName = sess.inputNames[0], outName = sess.outputNames[0];
+    return async X => {
+      for (let tries = 0; tries < 2; tries++) {
+        const buf = new Float32Array(B * WIN * NB).fill(Math.log(1e-6)); buf.set(X);
+        try { const d = (await sess.run({ [inName]: new Tensor('float32', buf, [B, WIN, NB]) }))[outName].data; return d.subarray(0, d.length / B); }
+        catch (e) { const m = /Expected: (\d+)/.exec(e.message || ''); if (m && +m[1] !== B && tries === 0) { B = +m[1]; continue; } throw e; }
+      }
+    };
+  }
 
   /* ---------- browser glue ---------- */
   const load = u => new Promise((ok, no) => { const s = document.createElement('script'); s.src = u; s.onload = ok; s.onerror = () => no(new Error('could not load ' + u)); document.head.appendChild(s); });
@@ -157,6 +170,21 @@
       } catch (e) { /* try the next address */ }
     }
     throw new Error('could not get ' + tag);
+  }
+  const pend = {};
+  function loadOnce(u, ok) { if (ok()) return Promise.resolve(); return pend[u] || (pend[u] = load(u).catch(e => { delete pend[u]; throw e; })); }
+  let crepeP = null, chordP = null;
+  function getCrepe() {                                  // load TensorFlow.js and CREPE once, never twice
+    return crepeP || (crepeP = (async () => { await loadOnce(TFJS, () => typeof tf !== 'undefined'); await tf.ready(); return tf.loadLayersModel(g.RKAI_CREPE || CREPE); })().catch(e => { crepeP = null; throw e; }));
+  }
+  function getChord(say) {                               // load onnxruntime and ChordMini once
+    return chordP || (chordP = (async () => {
+      await loadOnce(ORT + 'ort.min.js', () => typeof ort !== 'undefined'); ort.env.wasm.wasmPaths = ORT; ort.env.wasm.numThreads = 1;
+      const bytes = await getBytes(MODEL_URLS, 'chord model (10 MB, first time only)', say);
+      let labels = null; try { labels = findLabels(JSON.parse(new TextDecoder().decode(await getBytes(CONFIG_URLS, 'model labels', say)))); } catch (x) { }
+      const sess = await ort.InferenceSession.create(new Uint8Array(bytes), { executionProviders: ['wasm'] });
+      return { run: makeRunner(sess, ort.Tensor, 16), labels };
+    })().catch(e => { chordP = null; throw e; }));
   }
   let eng = null, node = null;
   const RKAI = {
@@ -178,25 +206,19 @@
       } catch (err) { say('AI unavailable: ' + err.message); return; }
       if (o.mode === 'vocal') {
         e.noChords = true; const cr = new Crepe(o.onPitch); e.o.onRaw = x => cr.push(x); say('AI: loading singing-pitch model (2 MB)…');
-        try { await load(TFJS); await tf.ready(); cr.model = await tf.loadLayersModel(CREPE); if (alive) say('AI voice model ready'); }
+        try { cr.model = await getCrepe(); if (alive) say('AI voice model ready'); }
         catch (err) { say('Voice model unavailable (' + err.message + '). Using the fast pitch tracker.'); }
         return;
       }
       say('AI: listening, loading chord model…');
       // 2. the model
       try {
-        await load(ORT + 'ort.min.js'); ort.env.wasm.wasmPaths = ORT; ort.env.wasm.numThreads = 1;
-        const bytes = await getBytes(MODEL_URLS, 'chord model (10 MB, first time only)', say);
-        let labels = null; try { labels = findLabels(JSON.parse(new TextDecoder().decode(await getBytes(CONFIG_URLS, 'model labels', say)))); } catch (x) { }
-        e.labels = labels || fallbackLabels();
-        const sess = await ort.InferenceSession.create(new Uint8Array(bytes), { executionProviders: ['wasm'] });
-        const inName = sess.inputNames[0], outName = sess.outputNames[0];
-        e.model = async X => (await sess.run({ [inName]: new ort.Tensor('float32', X, [1, WIN, NB]) }))[outName].data;
+        const c = await getChord(say); e.labels = c.labels || fallbackLabels(); e.model = c.run; const labels = c.labels;
         if (alive) say('AI model ready' + (labels ? '' : ' (default labels)'));
       } catch (err) { say('AI model unavailable (' + err.message + '). Using the fast engine.'); }
     },
     stop() { this.on = false; this._kill && this._kill(); try { node && node.disconnect(); } catch (e) { } node = null; eng = null; }
   };
   g.RKAI = RKAI;
-  if (typeof module !== 'undefined') module.exports = { Crepe, kernels, cqtFrame, tempo, Engine, parseLabel, findLabels, fallbackLabels, smoothArgmax, SR, HOP, WIN, NB, FR };
+  if (typeof module !== 'undefined') module.exports = { getCrepe, makeRunner, Crepe, kernels, cqtFrame, tempo, Engine, parseLabel, findLabels, fallbackLabels, smoothArgmax, SR, HOP, WIN, NB, FR };
 })(typeof window !== 'undefined' ? window : globalThis);
